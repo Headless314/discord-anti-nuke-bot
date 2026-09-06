@@ -1,5 +1,6 @@
 const {
   AuditLogEvent,
+  ChannelType,
   Client,
   Collection,
   EmbedBuilder,
@@ -27,11 +28,17 @@ const numberFromEnv = (name, fallback, minimum = 1) => {
   return Number.isInteger(value) && value >= minimum ? value : fallback;
 };
 
+const booleanFromEnv = (name, fallback) => {
+  if (process.env[name] === undefined) return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(process.env[name].toLowerCase());
+};
+
 const config = {
   token: process.env.DISCORD_TOKEN,
-  prefix: process.env.COMMAND_PREFIX || '!',
+  prefix: process.env.COMMAND_PREFIX || '>',
   defaultLogChannelId: process.env.LOG_CHANNEL_ID || null,
   windowMs: numberFromEnv('NUKE_WINDOW_MS', 30_000, 1_000),
+  autoBackupOnRisk: booleanFromEnv('AUTO_BACKUP_ON_RISK', true),
   thresholds: {
     channel_delete: numberFromEnv('CHANNEL_DELETE_THRESHOLD', 5),
     channel_create: numberFromEnv('CHANNEL_CREATE_THRESHOLD', 5),
@@ -49,10 +56,25 @@ const config = {
 
 const dataDirectory = path.join(__dirname, 'data');
 const settingsFile = path.join(dataDirectory, 'settings.json');
+const backupDirectory = path.join(dataDirectory, 'backups');
+const maxBackupsPerGuild = 25;
+const snowflakePattern = /^\d{15,20}$/;
+
+const whitelistNames = {
+  category: 'categories',
+  categories: 'categories',
+  channel: 'channels',
+  channels: 'channels',
+  role: 'roles',
+  roles: 'roles',
+  user: 'users',
+  users: 'users',
+};
 
 function loadSettings() {
   try {
-    return JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    const loaded = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    return loaded && typeof loaded === 'object' && !Array.isArray(loaded) ? loaded : {};
   } catch (error) {
     if (error.code !== 'ENOENT') {
       console.error('Could not read data/settings.json:', error.message);
@@ -63,13 +85,28 @@ function loadSettings() {
 
 const settings = loadSettings();
 
+function getGuildSettings(guildId) {
+  const guildSettings = settings[guildId] || {};
+  guildSettings.enabled = guildSettings.enabled !== false;
+  guildSettings.logChannelId = guildSettings.logChannelId || null;
+  guildSettings.alertAdminIds = Array.isArray(guildSettings.alertAdminIds)
+    ? guildSettings.alertAdminIds
+    : [];
+  guildSettings.whitelist = guildSettings.whitelist || {};
+
+  for (const listName of Object.values(whitelistNames)) {
+    guildSettings.whitelist[listName] = Array.isArray(guildSettings.whitelist[listName])
+      ? guildSettings.whitelist[listName]
+      : [];
+  }
+
+  settings[guildId] = guildSettings;
+  return guildSettings;
+}
+
 function saveSettings() {
   fs.mkdirSync(dataDirectory, { recursive: true });
   fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n', { mode: 0o600 });
-}
-
-function getGuildSettings(guildId) {
-  return settings[guildId] || {};
 }
 
 function getLogChannelId(guildId) {
@@ -80,7 +117,17 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function logAction(guild, title, description, color = 0xff0000) {
+function normalizeId(value) {
+  if (!value) return null;
+  const id = value.replace(/[<@!#&>]/g, '');
+  return snowflakePattern.test(id) ? id : null;
+}
+
+function isAdministrator(member) {
+  return Boolean(member && member.permissions.has(PermissionFlagsBits.Administrator));
+}
+
+async function logAction(guild, title, description, color = 0x050505) {
   const logChannelId = getLogChannelId(guild.id);
   if (!logChannelId) return;
 
@@ -88,11 +135,11 @@ async function logAction(guild, title, description, color = 0xff0000) {
   if (!logChannel || !logChannel.isTextBased()) return;
 
   const embed = new EmbedBuilder()
-    .setTitle('🛡️ ' + title)
+    .setTitle(title)
     .setDescription(description)
     .setColor(color)
     .setTimestamp()
-    .setFooter({ text: 'Guild: ' + guild.name });
+    .setFooter({ text: 'Anti-nuke security log' });
 
   await logChannel.send({ embeds: [embed] }).catch((error) => {
     console.error('Could not send security log:', error.message);
@@ -118,7 +165,41 @@ async function findExecutor(guild, action, targetId) {
   return null;
 }
 
+async function isWhitelisted(guild, executorId, target, type) {
+  const whitelist = getGuildSettings(guild.id).whitelist;
+
+  if (whitelist.users.includes(executorId) || config.trustedUserIds.has(executorId)) {
+    return true;
+  }
+
+  if (target && whitelist.channels.includes(target.id)) {
+    return true;
+  }
+
+  if (
+    target &&
+    target.type === ChannelType.GuildCategory &&
+    whitelist.categories.includes(target.id)
+  ) {
+    return true;
+  }
+
+  if (target && target.parentId && whitelist.categories.includes(target.parentId)) {
+    return true;
+  }
+
+  if (target && whitelist.roles.includes(target.id)) {
+    return true;
+  }
+
+  const member = await guild.members.fetch(executorId).catch(() => null);
+  return Boolean(
+    member && member.roles.cache.some((role) => whitelist.roles.includes(role.id)),
+  );
+}
+
 const activity = new Collection();
+const mitigations = new Collection();
 
 function trackActivity(userId, guildId, type) {
   const now = Date.now();
@@ -134,14 +215,12 @@ function trackActivity(userId, guildId, type) {
   return record.count;
 }
 
-function isTrusted(userId) {
-  return config.trustedUserIds.has(userId);
+function riskKey(guildId, userId, type) {
+  return guildId + ':' + userId + ':' + type;
 }
 
 async function handleSuspiciousUser(guild, userId, reason) {
-  if (isTrusted(userId) || userId === guild.ownerId || userId === client.user.id) {
-    return;
-  }
+  if (userId === guild.ownerId || userId === client.user.id) return;
 
   try {
     const member = await guild.members.fetch(userId).catch(() => null);
@@ -150,9 +229,13 @@ async function handleSuspiciousUser(guild, userId, reason) {
     if (!member.manageable) {
       await logAction(
         guild,
-        '🚨 SUSPICIOUS USER',
-        '<@' + userId + '> - ' + reason + '\nI could not remove roles because this member is above the bot in the role hierarchy.',
-        0xff0000,
+        'Suspicious user',
+        '<@' +
+          userId +
+          '> - ' +
+          reason +
+          '\nThe member is above the bot in the role hierarchy, so no roles were removed.',
+        0xff9900,
       );
       return;
     }
@@ -172,7 +255,7 @@ async function handleSuspiciousUser(guild, userId, reason) {
     if (dangerousRoles.size === 0) {
       await logAction(
         guild,
-        '🚨 SUSPICIOUS USER',
+        'Suspicious user',
         '<@' + userId + '> - ' + reason + '\nNo manageable dangerous roles were found.',
         0xff0000,
       );
@@ -187,12 +270,162 @@ async function handleSuspiciousUser(guild, userId, reason) {
 
     await logAction(
       guild,
-      '🚨 SUSPICIOUS USER',
-      '<@' + userId + '> - ' + reason + ' - removed ' + dangerousRoles.size + ' dangerous role(s).',
+      'Suspicious user',
+      '<@' +
+        userId +
+        '> - ' +
+        reason +
+        ' - removed ' +
+        dangerousRoles.size +
+        ' dangerous role(s).',
       0xff0000,
     );
   } catch (error) {
     console.error('Could not handle suspicious user:', error.message);
+  }
+}
+
+function serializePermissionOverwrites(channel) {
+  return channel.permissionOverwrites.cache.map((overwrite) => ({
+    id: overwrite.id,
+    type: overwrite.type,
+    allow: overwrite.allow.bitfield.toString(),
+    deny: overwrite.deny.bitfield.toString(),
+  }));
+}
+
+function serializeRole(role) {
+  return {
+    id: role.id,
+    name: role.name,
+    color: role.color,
+    hoist: role.hoist,
+    managed: role.managed,
+    mentionable: role.mentionable,
+    position: role.position,
+    permissions: role.permissions.bitfield.toString(),
+  };
+}
+
+function serializeChannel(channel) {
+  return {
+    id: channel.id,
+    name: channel.name,
+    type: channel.type,
+    parentId: channel.parentId,
+    position: channel.rawPosition || 0,
+    topic: channel.topic || null,
+    nsfw: Boolean(channel.nsfw),
+    rateLimitPerUser: channel.rateLimitPerUser || 0,
+    bitrate: channel.bitrate || null,
+    userLimit: channel.userLimit || null,
+    permissionOverwrites: channel.permissionOverwrites
+      ? serializePermissionOverwrites(channel)
+      : [],
+  };
+}
+
+function backupFileName(guildId) {
+  const timestamp = new Date().toISOString().replace(/[-:.]/g, '').replace('T', '-').replace('Z', '');
+  return guildId + '-' + timestamp + '.json';
+}
+
+async function createServerBackup(guild, reason) {
+  const backup = {
+    schemaVersion: 1,
+    createdAt: new Date().toISOString(),
+    reason,
+    guild: {
+      id: guild.id,
+      name: guild.name,
+      description: guild.description || null,
+      verificationLevel: guild.verificationLevel,
+      defaultMessageNotifications: guild.defaultMessageNotifications,
+      explicitContentFilter: guild.explicitContentFilter,
+      systemChannelId: guild.systemChannelId,
+      rulesChannelId: guild.rulesChannelId,
+      publicUpdatesChannelId: guild.publicUpdatesChannelId,
+    },
+    roles: [...guild.roles.cache.values()]
+      .sort((first, second) => first.position - second.position)
+      .map(serializeRole),
+    channels: [...guild.channels.cache.values()]
+      .sort((first, second) => first.rawPosition - second.rawPosition)
+      .map(serializeChannel),
+  };
+
+  fs.mkdirSync(backupDirectory, { recursive: true });
+  const fileName = backupFileName(guild.id);
+  fs.writeFileSync(path.join(backupDirectory, fileName), JSON.stringify(backup, null, 2) + '\n', {
+    mode: 0o600,
+  });
+
+  const backups = fs
+    .readdirSync(backupDirectory)
+    .filter((file) => file.startsWith(guild.id + '-') && file.endsWith('.json'))
+    .sort()
+    .reverse();
+
+  for (const oldBackup of backups.slice(maxBackupsPerGuild)) {
+    fs.unlinkSync(path.join(backupDirectory, oldBackup));
+  }
+
+  return { fileName, roles: backup.roles.length, channels: backup.channels.length };
+}
+
+function listServerBackups(guildId) {
+  if (!fs.existsSync(backupDirectory)) return [];
+  return fs
+    .readdirSync(backupDirectory)
+    .filter((file) => file.startsWith(guildId + '-') && file.endsWith('.json'))
+    .sort()
+    .reverse();
+}
+
+function getBackupPath(guildId, fileName) {
+  if (!/^[a-zA-Z0-9_.-]+\.json$/.test(fileName)) return null;
+  const expectedPrefix = guildId + '-';
+  if (!fileName.startsWith(expectedPrefix)) return null;
+  const candidate = path.join(backupDirectory, fileName);
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
+async function notifyAdmins(guild, reason, executorId, backupName) {
+  const guildSettings = getGuildSettings(guild.id);
+  const now = Date.now();
+  if (guildSettings.lastRiskAlertAt && now - guildSettings.lastRiskAlertAt < 60_000) {
+    return;
+  }
+
+  guildSettings.lastRiskAlertAt = now;
+  try {
+    saveSettings();
+  } catch (error) {
+    console.error('Could not save risk alert state:', error.message);
+  }
+
+  const recipients = [...new Set(guildSettings.alertAdminIds)].slice(0, 10);
+  if (recipients.length === 0) return;
+
+  const message =
+    'ANTI-NUKE ALERT\n' +
+    'Server: ' +
+    guild.name +
+    '\nReason: ' +
+    reason +
+    '\nExecutor: ' +
+    executorId +
+    '\nBackup: ' +
+    (backupName || 'not created') +
+    '\nReview the server audit log immediately.';
+
+  for (const userId of recipients) {
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (!member || (!isAdministrator(member) && member.id !== guild.ownerId)) continue;
+    await member.send(message).catch((error) => {
+      console.error('Could not notify administrator ' + userId + ':', error.message);
+    });
+    await wait(300);
   }
 }
 
@@ -206,43 +439,298 @@ async function recordActivity({
   reason,
   color = 0xff6600,
 }) {
+  if (!getGuildSettings(guild.id).enabled) return;
+
   const executor = await findExecutor(guild, auditAction, target.id);
   if (!executor) {
-    await logAction(guild, title, details + '\n**By:** Unknown (audit log entry was not available yet).', color);
+    await logAction(
+      guild,
+      title,
+      details + '\nBy: Unknown (the audit log entry was not available yet).',
+      color,
+    );
     return;
   }
 
-  if (isTrusted(executor.id)) return;
+  if (await isWhitelisted(guild, executor.id, target, type)) return;
 
   const count = trackActivity(executor.id, guild.id, type);
   const threshold = config.thresholds[type];
   await logAction(
     guild,
     title,
-    details + '\n**By:** <@' + executor.id + '>\n**Count:** ' + count + '/' + threshold,
+    details + '\nBy: <@' + executor.id + '>\nCount: ' + count + '/' + threshold,
     color,
   );
 
-  if (count >= threshold) {
-    await handleSuspiciousUser(guild, executor.id, reason);
+  if (count < threshold) return;
+
+  const key = riskKey(guild.id, executor.id, type);
+  if (mitigations.has(key)) return;
+  mitigations.set(key, true);
+  setTimeout(() => mitigations.delete(key), config.windowMs);
+
+  let backup = null;
+  if (config.autoBackupOnRisk) {
+    backup = await createServerBackup(guild, 'Risk detected: ' + reason).catch((error) => {
+      console.error('Could not create risk backup:', error.message);
+      return null;
+    });
   }
+
+  await handleSuspiciousUser(guild, executor.id, reason);
+  await notifyAdmins(guild, reason, executor.id, backup && backup.fileName);
+}
+
+function helpEmbed(command) {
+  const banner =
+    '+--------------------------------------+\n' +
+    '|           ANTI-NUKE CONTROL          |\n' +
+    '|              COMMAND HELP            |\n' +
+    '+--------------------------------------+';
+  const embed = new EmbedBuilder()
+    .setTitle('Anti-nuke command center')
+    .setColor(0x050505)
+    .setDescription('```text\n' + banner + '\n```\nPrefix: `' + config.prefix + '`');
+
+  if (command === 'whitelist' || command === 'wl') {
+    return embed.addFields({
+      name: 'Whitelist commands',
+      value:
+        '`>whitelist user add <id>`\n' +
+        '`>whitelist user remove <id>`\n' +
+        '`>whitelist channel add <id>`\n' +
+        '`>whitelist category add <id>`\n' +
+        '`>whitelist role add <id>`\n' +
+        '`>whitelist list`',
+    });
+  }
+
+  if (command === 'backup') {
+    return embed.addFields({
+      name: 'Backup commands',
+      value:
+        '`>backup create` - Save server structure\n' +
+        '`>backup list` - List this server backups\n' +
+        '`>backup inspect <file>` - Inspect one backup',
+    });
+  }
+
+  if (command === 'admin') {
+    return embed.addFields({
+      name: 'Administrator alerts',
+      value:
+        '`>admin add <id>` - Add an administrator alert recipient\n' +
+        '`>admin remove <id>` - Remove a recipient\n' +
+        '`>admin list` - List configured recipients',
+    });
+  }
+
+  return embed.addFields(
+    {
+      name: 'Protection',
+      value:
+        '`>antinuke status` - Show protection status\n' +
+        '`>antinuke enable` - Enable automatic mitigation\n' +
+        '`>antinuke disable` - Disable automatic mitigation\n' +
+        '`>setup` - Save this channel for security logs',
+    },
+    {
+      name: 'Access control',
+      value:
+        '`>whitelist ...` - Manage users, roles, channels, and categories\n' +
+        '`>admin ...` - Manage risk alert recipients',
+    },
+    {
+      name: 'Backups',
+      value:
+        '`>backup create` - Snapshot roles, channels, categories, and overwrites\n' +
+        '`>backup list` - List saved snapshots\n' +
+        '`>backup inspect <file>` - Inspect a snapshot',
+    },
+    {
+      name: 'Help',
+      value:
+        '`>help whitelist`   `>help backup`   `>help admin`\n' +
+        '`>status` - Alias for `>antinuke status`',
+    },
+  );
+}
+
+function statusEmbed(guild) {
+  const guildSettings = getGuildSettings(guild.id);
+  const whitelist = guildSettings.whitelist;
+  return new EmbedBuilder()
+    .setTitle('Anti-nuke status')
+    .setColor(guildSettings.enabled ? 0x050505 : 0x555555)
+    .setDescription(
+      '```text\n' +
+        '+--------------------------------------+\n' +
+        '|           SECURITY STATUS            |\n' +
+        '+--------------------------------------+\n' +
+        '```',
+    )
+    .addFields(
+      { name: 'Automatic mitigation', value: guildSettings.enabled ? 'Enabled' : 'Disabled', inline: true },
+      { name: 'Log channel', value: getLogChannelId(guild.id) ? '<#' + getLogChannelId(guild.id) + '>' : 'Not configured', inline: true },
+      { name: 'Risk backup', value: config.autoBackupOnRisk ? 'Enabled' : 'Disabled', inline: true },
+      { name: 'Whitelisted users', value: String(whitelist.users.length), inline: true },
+      { name: 'Whitelisted roles', value: String(whitelist.roles.length), inline: true },
+      { name: 'Whitelisted channels', value: String(whitelist.channels.length), inline: true },
+      { name: 'Whitelisted categories', value: String(whitelist.categories.length), inline: true },
+      { name: 'Alert recipients', value: String(guildSettings.alertAdminIds.length), inline: true },
+    );
+}
+
+async function handleWhitelistCommand(message, args) {
+  if (!isAdministrator(message.member)) {
+    await message.reply('Administrator permission required.');
+    return;
+  }
+
+  const type = whitelistNames[args.shift()?.toLowerCase()];
+  const action = args.shift()?.toLowerCase();
+  const guildSettings = getGuildSettings(message.guild.id);
+
+  if (!type || !action || action === 'list') {
+    const lines = Object.entries(guildSettings.whitelist).map(
+      ([name, values]) => name + ': ' + (values.length ? values.join(', ') : 'none'),
+    );
+    await message.reply({ embeds: [helpEmbed('whitelist').addFields({ name: 'Current whitelist', value: lines.join('\n') })] });
+    return;
+  }
+
+  if (!['add', 'remove'].includes(action)) {
+    await message.reply('Use add, remove, or list. Example: >whitelist user add 123456789012345678');
+    return;
+  }
+
+  const id = normalizeId(args.shift());
+  if (!id) {
+    await message.reply('Provide a valid Discord user, role, channel, or category ID.');
+    return;
+  }
+
+  const list = guildSettings.whitelist[type];
+  if (action === 'add' && !list.includes(id)) list.push(id);
+  if (action === 'remove') {
+    const index = list.indexOf(id);
+    if (index !== -1) list.splice(index, 1);
+  }
+  saveSettings();
+  await message.reply('Whitelist ' + action + ' completed for ' + type + ': ' + id);
+}
+
+async function handleAdminCommand(message, args) {
+  if (!isAdministrator(message.member)) {
+    await message.reply('Administrator permission required.');
+    return;
+  }
+
+  const action = args.shift()?.toLowerCase();
+  const guildSettings = getGuildSettings(message.guild.id);
+
+  if (action === 'list') {
+    await message.reply(
+      guildSettings.alertAdminIds.length
+        ? 'Configured alert administrator IDs:\n' + guildSettings.alertAdminIds.join('\n')
+        : 'No alert administrator IDs configured.',
+    );
+    return;
+  }
+
+  if (!['add', 'remove'].includes(action)) {
+    await message.reply('Use >admin add <id>, >admin remove <id>, or >admin list.');
+    return;
+  }
+
+  const id = normalizeId(args.shift());
+  if (!id) {
+    await message.reply('Provide a valid Discord user ID.');
+    return;
+  }
+
+  if (action === 'add' && !guildSettings.alertAdminIds.includes(id)) {
+    guildSettings.alertAdminIds.push(id);
+  }
+  if (action === 'remove') {
+    const index = guildSettings.alertAdminIds.indexOf(id);
+    if (index !== -1) guildSettings.alertAdminIds.splice(index, 1);
+  }
+  saveSettings();
+  await message.reply('Administrator alert recipient ' + action + ': ' + id);
+}
+
+async function handleBackupCommand(message, args) {
+  if (!isAdministrator(message.member)) {
+    await message.reply('Administrator permission required.');
+    return;
+  }
+
+  const action = args.shift()?.toLowerCase();
+  if (action === 'create') {
+    const backup = await createServerBackup(message.guild, 'Manual backup');
+    await message.reply(
+      'Backup created: ' +
+        backup.fileName +
+        '\nRoles: ' +
+        backup.roles +
+        '\nChannels: ' +
+        backup.channels,
+    );
+    return;
+  }
+
+  if (action === 'list') {
+    const backups = listServerBackups(message.guild.id);
+    await message.reply(
+      backups.length ? 'Server backups:\n' + backups.slice(0, 10).join('\n') : 'No backups found.',
+    );
+    return;
+  }
+
+  if (action === 'inspect') {
+    const fileName = args.shift();
+    const backupPath = fileName && getBackupPath(message.guild.id, fileName);
+    if (!backupPath) {
+      await message.reply('Backup file not found. Use >backup list first.');
+      return;
+    }
+
+    const backup = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
+    await message.reply(
+      'Backup: ' +
+        fileName +
+        '\nCreated: ' +
+        backup.createdAt +
+        '\nReason: ' +
+        backup.reason +
+        '\nRoles: ' +
+        backup.roles.length +
+        '\nChannels: ' +
+        backup.channels.length,
+    );
+    return;
+  }
+
+  await message.reply('Use >backup create, >backup list, or >backup inspect <file>.');
 }
 
 client.once('ready', () => {
-  console.log('✅ Bot logged in as ' + client.user.tag);
-  client.user.setActivity('for nukes 🛡️', { type: 'WATCHING' });
+  console.log('Bot logged in as ' + client.user.tag);
+  client.user.setActivity('security monitoring', { type: 'WATCHING' });
 });
 
 client.on('messageDeleteBulk', async (messages, channel) => {
   if (!channel.guild || messages.size <= 10) return;
   await logAction(
     channel.guild,
-    'Bulk Delete',
+    'Bulk delete',
     messages.size +
       ' messages deleted in <#' +
       channel.id +
-      '>.\nThe Discord message-delete event does not reliably identify the actor; review the server audit log for attribution.',
-    0xffff00,
+      '>.\nThe message event does not reliably identify the actor. Review the server audit log.',
+    0x050505,
   );
 });
 
@@ -253,8 +741,8 @@ client.on('channelDelete', async (channel) => {
     target: channel,
     auditAction: AuditLogEvent.ChannelDelete,
     type: 'channel_delete',
-    title: 'Channel Deleted',
-    details: '**Channel:** ' + channel.name,
+    title: 'Channel deleted',
+    details: 'Channel: ' + channel.name,
     reason: 'mass channel deletion',
   });
 });
@@ -266,10 +754,10 @@ client.on('channelCreate', async (channel) => {
     target: channel,
     auditAction: AuditLogEvent.ChannelCreate,
     type: 'channel_create',
-    title: 'Channel Created',
-    details: '**Channel:** <#' + channel.id + '>',
+    title: 'Channel created',
+    details: 'Channel: <#' + channel.id + '>',
     reason: 'mass channel creation',
-    color: 0xff0000,
+    color: 0x050505,
   });
 });
 
@@ -279,8 +767,8 @@ client.on('roleDelete', async (role) => {
     target: role,
     auditAction: AuditLogEvent.RoleDelete,
     type: 'role_delete',
-    title: 'Role Deleted',
-    details: '**Role:** ' + role.name,
+    title: 'Role deleted',
+    details: 'Role: ' + role.name,
     reason: 'mass role deletion',
   });
 });
@@ -291,10 +779,10 @@ client.on('roleCreate', async (role) => {
     target: role,
     auditAction: AuditLogEvent.RoleCreate,
     type: 'role_create',
-    title: 'Role Created',
-    details: '**Role:** ' + role.name,
+    title: 'Role created',
+    details: 'Role: ' + role.name,
     reason: 'mass role creation',
-    color: 0xff0000,
+    color: 0x050505,
   });
 });
 
@@ -304,8 +792,8 @@ client.on('guildBanAdd', async (ban) => {
     target: ban.user,
     auditAction: AuditLogEvent.MemberBanAdd,
     type: 'ban',
-    title: 'Member Banned',
-    details: '**Member:** <@' + ban.user.id + '>',
+    title: 'Member banned',
+    details: 'Member: <@' + ban.user.id + '>',
     reason: 'mass bans',
   });
 });
@@ -318,52 +806,39 @@ client.on('messageCreate', async (message) => {
   const args = commandText.split(/ +/);
   const command = args.shift().toLowerCase();
 
-  if (command === 'status') {
-    const logChannelId = getLogChannelId(message.guild.id);
-    await message.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle('🛡️ Bot Status')
-          .setDescription(
-            'Bot is online!\nLog channel: ' +
-              (logChannelId ? '<#' + logChannelId + '>' : 'not configured'),
-          )
-          .setColor(0x00ff00),
-      ],
-    });
+  if (command === 'help') {
+    await message.reply({ embeds: [helpEmbed(args.shift()?.toLowerCase())] });
   } else if (command === 'setup') {
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      await message.reply('❌ Administrator permission required.');
+    if (!isAdministrator(message.member)) {
+      await message.reply('Administrator permission required.');
       return;
     }
-
-    settings[message.guild.id] = {
-      ...getGuildSettings(message.guild.id),
-      logChannelId: message.channel.id,
-    };
-    try {
+    const guildSettings = getGuildSettings(message.guild.id);
+    guildSettings.logChannelId = message.channel.id;
+    saveSettings();
+    await message.reply('Security log channel saved for this server.');
+  } else if (command === 'status' || command === 'antinuke') {
+    const subcommand = command === 'status' ? 'status' : args.shift()?.toLowerCase();
+    const guildSettings = getGuildSettings(message.guild.id);
+    if (subcommand === 'status' || !subcommand) {
+      await message.reply({ embeds: [statusEmbed(message.guild)] });
+    } else if (subcommand === 'enable' || subcommand === 'disable') {
+      if (!isAdministrator(message.member)) {
+        await message.reply('Administrator permission required.');
+        return;
+      }
+      guildSettings.enabled = subcommand === 'enable';
       saveSettings();
-      await message.reply('✅ Log channel saved for this server.');
-    } catch (error) {
-      console.error('Could not save settings:', error.message);
-      await message.reply('⚠️ Log channel was set for this run, but saving to disk failed.');
+      await message.reply('Automatic anti-nuke mitigation ' + (guildSettings.enabled ? 'enabled.' : 'disabled.'));
+    } else {
+      await message.reply('Use >antinuke status, >antinuke enable, or >antinuke disable.');
     }
-  } else if (command === 'help') {
-    await message.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle('🛡️ Commands')
-          .addFields(
-            {
-              name: config.prefix + 'setup',
-              value: 'Save the current channel as the security log channel.',
-            },
-            { name: config.prefix + 'status', value: 'Check bot and log-channel status.' },
-            { name: config.prefix + 'help', value: 'Show this message.' },
-          )
-          .setColor(0x0099ff),
-      ],
-    });
+  } else if (command === 'whitelist' || command === 'wl') {
+    await handleWhitelistCommand(message, args);
+  } else if (command === 'admin') {
+    await handleAdminCommand(message, args);
+  } else if (command === 'backup') {
+    await handleBackupCommand(message, args);
   }
 });
 
