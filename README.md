@@ -11,6 +11,10 @@ A Discord.js anti-nuke bot that watches destructive server actions, attributes t
 - Audit-log attribution with retries
 - Separate counters for every action type
 - Per-server enable or disable control
+- Per-server thresholds and activity windows
+- Dry-run mode for safe testing
+- Recent audit-log inspection
+- Activity counter reset
 - Persistent user, role, channel, and category whitelists
 - Structure backups before automatic mitigation
 - Direct administrator alerts by Discord user ID
@@ -67,6 +71,8 @@ The log channel, whitelists, alert recipients, and enable state are saved in `da
 - `>antinuke status` - Show current server protection status.
 - `>antinuke enable` - Enable automatic mitigation.
 - `>antinuke disable` - Disable automatic mitigation.
+- `>antinuke dry-run on|off` - Detect and log risk without removing roles.
+- `>antinuke reset` - Clear current activity counters and pending mitigations.
 - `>setup` - Save the current channel as the security log channel.
 
 ### Whitelists
@@ -80,6 +86,8 @@ The log channel, whitelists, alert recipients, and enable state are saved in `da
 - `>whitelist category add <id>`
 - `>whitelist category remove <id>`
 - `>whitelist list`
+- `>whitelist clear user|role|channel|category`
+- `>whitelist clear all`
 
 User whitelist entries ignore actions performed by those users. Role whitelist entries ignore users who hold those roles and protect a role with the matching ID from role deletion. Channel entries ignore actions on that channel. Category entries ignore actions on the category and its child channels.
 
@@ -90,6 +98,7 @@ IDs can be copied from Discord with Developer Mode enabled. Mentions such as `<@
 - `>admin add <id>` - Add an administrator recipient.
 - `>admin remove <id>` - Remove a recipient.
 - `>admin list` - List configured recipients.
+- `>admin test` - Send a test notification to configured recipients.
 
 When a configured recipient is a server administrator or the owner, the bot sends one direct alert per risk window. Notifications are capped at ten recipients and rate-limited to avoid DM spam. No alert is sent until a recipient is explicitly configured.
 
@@ -98,6 +107,21 @@ When a configured recipient is a server administrator or the owner, the bot send
 - `>backup create` - Save a manual structure backup.
 - `>backup list` - List this server's saved backups.
 - `>backup inspect <file>` - Inspect a saved backup.
+
+### Audit and configuration
+
+- `>audit recent` - Show the latest ten audit-log entries.
+- `>audit recent 15` - Show up to fifteen audit-log entries.
+- `>logs recent` - Alias for `>audit recent`.
+- `>config show` - Show server-specific overrides.
+- `>config threshold <type> <number>` - Set a threshold from 1 to 100.
+- `>config window <seconds>` - Set the activity window from 5 to 3600 seconds.
+- `>config backup on|off` - Enable or disable automatic risk backups.
+- `>config dry-run on|off` - Enable or disable dry-run mode.
+
+Supported threshold types are `channel-delete`, `channel-create`, `role-delete`, `role-create`, and `ban`.
+
+Use dry-run mode before changing thresholds in a live server. It continues to record risk and create configured backups, but it does not remove roles.
 
 Backups include guild metadata, roles, role permissions, channels, categories, positions, topics, slowmode, and channel permission overwrites. Discord bot backups do not include message history, member private data, tokens, or a guaranteed one-command restore. The bot keeps the newest 25 backups per server.
 
