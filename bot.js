@@ -6,7 +6,7 @@ const {
   ChannelType,
   Client,
   Collection,
-  EmbedBuilder,
+  EmbedBuilder: DiscordEmbedBuilder,
   GatewayIntentBits,
   ModalBuilder,
   PermissionFlagsBits,
@@ -20,7 +20,53 @@ const path = require('node:path');
 
 dotenv.config();
 
-const EMBED_BLACK = 0x000000;
+const lowercaseEmbedText = (value) => typeof value === 'string' ? value.toLowerCase() : value;
+
+class LowercaseEmbedBuilder extends DiscordEmbedBuilder {
+  setTitle(title) {
+    return super.setTitle(lowercaseEmbedText(title));
+  }
+
+  setDescription(description) {
+    return super.setDescription(lowercaseEmbedText(description));
+  }
+
+  addFields(...fields) {
+    const normalizedFields = fields
+      .flatMap((field) => Array.isArray(field) ? field : [field])
+      .map((field) => {
+        if (!field || typeof field !== 'object') return field;
+        return {
+          ...field,
+          ...(field.name !== undefined ? { name: lowercaseEmbedText(field.name) } : {}),
+          ...(field.value !== undefined ? { value: lowercaseEmbedText(field.value) } : {}),
+        };
+      });
+    return super.addFields(...normalizedFields);
+  }
+
+  setFooter(footer) {
+    if (!footer || typeof footer !== 'object') return super.setFooter(footer);
+    return super.setFooter({
+      ...footer,
+      ...(footer.text !== undefined ? { text: lowercaseEmbedText(footer.text) } : {}),
+    });
+  }
+
+  setAuthor(author) {
+    if (!author || typeof author !== 'object') return super.setAuthor(author);
+    return super.setAuthor({
+      ...author,
+      ...(author.name !== undefined ? { name: lowercaseEmbedText(author.name) } : {}),
+    });
+  }
+
+  setColor() {
+    return this;
+  }
+}
+
+const EmbedBuilder = LowercaseEmbedBuilder;
 
 const client = new Client({
   intents: [
@@ -261,6 +307,7 @@ async function handleDirectMessageCommand(message) {
   if (!config.ownerUserId || message.author.id !== config.ownerUserId) return;
   const commandText = message.content.slice(config.prefix.length).trim();
   if (!commandText) return;
+  await message.delete().catch(() => {});
   const args = commandText.split(/ +/);
   const command = args.shift().toLowerCase();
   if (command === 'pfp' || command === 'avatar') {
@@ -816,9 +863,7 @@ async function recordActivity({
 
 function helpEmbed(command, page = 1) {
   const commandText = (value) => String.fromCharCode(96) + value + String.fromCharCode(96);
-  const embed = new EmbedBuilder()
-    .setTitle('Anti-Nuke Command Center')
-    .setColor(EMBED_BLACK);
+  const embed = new EmbedBuilder();
 
   if (command === 'whitelist' || command === 'wl') {
     return embed.addFields({
@@ -892,8 +937,6 @@ function helpEmbed(command, page = 1) {
   }
 
   const pageNumber = page === 2 ? 2 : 1;
-  embed.setFooter({ text: 'Page ' + pageNumber + ' of 2 - Use the buttons to navigate' });
-
   if (pageNumber === 1) {
     return embed.addFields(
       {
@@ -1787,6 +1830,7 @@ client.on('interactionCreate', async (interaction) => {
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.content.startsWith(config.prefix)) return;
   if (!message.guild) {
+    await message.delete().catch(() => {});
     await handleDirectMessageCommand(message);
     return;
   }
