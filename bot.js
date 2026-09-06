@@ -71,6 +71,34 @@ const whitelistNames = {
   users: 'users',
 };
 
+const thresholdNames = {
+  channel_delete: 'channel_delete',
+  'channel-delete': 'channel_delete',
+  channel_create: 'channel_create',
+  'channel-create': 'channel_create',
+  role_delete: 'role_delete',
+  'role-delete': 'role_delete',
+  role_create: 'role_create',
+  'role-create': 'role_create',
+  ban: 'ban',
+  bans: 'ban',
+};
+
+const auditActionLabels = {
+  ChannelCreate: 'channel create',
+  ChannelDelete: 'channel delete',
+  RoleCreate: 'role create',
+  RoleDelete: 'role delete',
+  MemberBanAdd: 'member ban',
+  MemberKick: 'member kick',
+  MemberPrune: 'member prune',
+  MessageBulkDelete: 'bulk message delete',
+  MemberRoleUpdate: 'member role update',
+  ChannelOverwriteCreate: 'channel permission create',
+  ChannelOverwriteUpdate: 'channel permission update',
+  ChannelOverwriteDelete: 'channel permission delete',
+};
+
 function loadSettings() {
   try {
     const loaded = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
@@ -88,6 +116,21 @@ const settings = loadSettings();
 function getGuildSettings(guildId) {
   const guildSettings = settings[guildId] || {};
   guildSettings.enabled = guildSettings.enabled !== false;
+  guildSettings.dryRun = guildSettings.dryRun === true;
+  guildSettings.windowMs =
+    Number.isInteger(guildSettings.windowMs) && guildSettings.windowMs >= 5_000
+      ? Math.min(guildSettings.windowMs, 3_600_000)
+      : config.windowMs;
+  guildSettings.autoBackupOnRisk = guildSettings.autoBackupOnRisk !== false;
+  guildSettings.thresholds = guildSettings.thresholds || {};
+  for (const type of Object.keys(config.thresholds)) {
+    if (
+      !Number.isInteger(guildSettings.thresholds[type]) ||
+      guildSettings.thresholds[type] < 1
+    ) {
+      guildSettings.thresholds[type] = config.thresholds[type];
+    }
+  }
   guildSettings.logChannelId = guildSettings.logChannelId || null;
   guildSettings.alertAdminIds = Array.isArray(guildSettings.alertAdminIds)
     ? guildSettings.alertAdminIds
@@ -102,6 +145,14 @@ function getGuildSettings(guildId) {
 
   settings[guildId] = guildSettings;
   return guildSettings;
+}
+
+function getThreshold(guildId, type) {
+  return getGuildSettings(guildId).thresholds[type] || config.thresholds[type];
+}
+
+function getWindowMs(guildId) {
+  return getGuildSettings(guildId).windowMs;
 }
 
 function saveSettings() {
@@ -206,7 +257,7 @@ function trackActivity(userId, guildId, type) {
   const key = guildId + ':' + userId + ':' + type;
   let record = activity.get(key);
 
-  if (!record || now - record.startedAt > config.windowMs) {
+  if (!record || now - record.startedAt > getWindowMs(guildId)) {
     record = { count: 0, startedAt: now };
     activity.set(key, record);
   }
@@ -217,6 +268,15 @@ function trackActivity(userId, guildId, type) {
 
 function riskKey(guildId, userId, type) {
   return guildId + ':' + userId + ':' + type;
+}
+
+function resetGuildState(guildId) {
+  for (const key of activity.keys()) {
+    if (key.startsWith(guildId + ':')) activity.delete(key);
+  }
+  for (const key of mitigations.keys()) {
+    if (key.startsWith(guildId + ':')) mitigations.delete(key);
+  }
 }
 
 async function handleSuspiciousUser(guild, userId, reason) {
@@ -417,6 +477,8 @@ async function notifyAdmins(guild, reason, executorId, backupName) {
     executorId +
     '\nBackup: ' +
     (backupName || 'not created') +
+    '\nMode: ' +
+    (getGuildSettings(guild.id).dryRun ? 'dry run' : 'active mitigation') +
     '\nReview the server audit log immediately.';
 
   for (const userId of recipients) {
@@ -427,6 +489,32 @@ async function notifyAdmins(guild, reason, executorId, backupName) {
     });
     await wait(300);
   }
+}
+
+async function sendAdminTest(guild) {
+  const recipients = [...new Set(getGuildSettings(guild.id).alertAdminIds)].slice(0, 10);
+  let sent = 0;
+
+  for (const userId of recipients) {
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (!member || (!isAdministrator(member) && member.id !== guild.ownerId)) continue;
+    await member
+      .send(
+        'ANTI-NUKE TEST\n' +
+          'This is a test alert from ' +
+          guild.name +
+          '. Administrator notifications are configured correctly.',
+      )
+      .then(() => {
+        sent += 1;
+      })
+      .catch((error) => {
+        console.error('Could not send test alert to ' + userId + ':', error.message);
+      });
+    await wait(300);
+  }
+
+  return sent;
 }
 
 async function recordActivity({
@@ -455,7 +543,7 @@ async function recordActivity({
   if (await isWhitelisted(guild, executor.id, target, type)) return;
 
   const count = trackActivity(executor.id, guild.id, type);
-  const threshold = config.thresholds[type];
+  const threshold = getThreshold(guild.id, type);
   await logAction(
     guild,
     title,
@@ -468,17 +556,29 @@ async function recordActivity({
   const key = riskKey(guild.id, executor.id, type);
   if (mitigations.has(key)) return;
   mitigations.set(key, true);
-  setTimeout(() => mitigations.delete(key), config.windowMs);
+  setTimeout(() => mitigations.delete(key), getWindowMs(guild.id));
 
   let backup = null;
-  if (config.autoBackupOnRisk) {
+  if (getGuildSettings(guild.id).autoBackupOnRisk) {
     backup = await createServerBackup(guild, 'Risk detected: ' + reason).catch((error) => {
       console.error('Could not create risk backup:', error.message);
       return null;
     });
   }
 
-  await handleSuspiciousUser(guild, executor.id, reason);
+  if (getGuildSettings(guild.id).dryRun) {
+    await logAction(
+      guild,
+      'Dry run risk threshold reached',
+      'No roles were changed because dry run mode is enabled.\nExecutor: <@' +
+        executor.id +
+        '>\nReason: ' +
+        reason,
+      0xff9900,
+    );
+  } else {
+    await handleSuspiciousUser(guild, executor.id, reason);
+  }
   await notifyAdmins(guild, reason, executor.id, backup && backup.fileName);
 }
 
@@ -522,7 +622,29 @@ function helpEmbed(command) {
       value:
         '`>admin add <id>` - Add an administrator alert recipient\n' +
         '`>admin remove <id>` - Remove a recipient\n' +
-        '`>admin list` - List configured recipients',
+        '`>admin list` - List configured recipients\n' +
+        '`>admin test` - Send a test alert',
+    });
+  }
+
+  if (command === 'audit' || command === 'logs') {
+    return embed.addFields({
+      name: 'Audit commands',
+      value:
+        '`>audit recent` - Show recent server audit entries\n' +
+        '`>audit recent 15` - Show up to 15 entries',
+    });
+  }
+
+  if (command === 'config') {
+    return embed.addFields({
+      name: 'Configuration commands',
+      value:
+        '`>config show` - Show server overrides\n' +
+        '`>config threshold <type> <number>`\n' +
+        '`>config window <seconds>`\n' +
+        '`>config backup on|off`\n' +
+        '`>config dry-run on|off`',
     });
   }
 
@@ -533,6 +655,8 @@ function helpEmbed(command) {
         '`>antinuke status` - Show protection status\n' +
         '`>antinuke enable` - Enable automatic mitigation\n' +
         '`>antinuke disable` - Disable automatic mitigation\n' +
+        '`>antinuke dry-run on|off` - Preview mitigation without role changes\n' +
+        '`>antinuke reset` - Clear current activity counters\n' +
         '`>setup` - Save this channel for security logs',
     },
     {
@@ -552,6 +676,7 @@ function helpEmbed(command) {
       name: 'Help',
       value:
         '`>help whitelist`   `>help backup`   `>help admin`\n' +
+        '`>help audit`       `>help config`\n' +
         '`>status` - Alias for `>antinuke status`',
     },
   );
@@ -573,7 +698,14 @@ function statusEmbed(guild) {
     .addFields(
       { name: 'Automatic mitigation', value: guildSettings.enabled ? 'Enabled' : 'Disabled', inline: true },
       { name: 'Log channel', value: getLogChannelId(guild.id) ? '<#' + getLogChannelId(guild.id) + '>' : 'Not configured', inline: true },
-      { name: 'Risk backup', value: config.autoBackupOnRisk ? 'Enabled' : 'Disabled', inline: true },
+      { name: 'Risk backup', value: guildSettings.autoBackupOnRisk ? 'Enabled' : 'Disabled', inline: true },
+      { name: 'Dry run', value: guildSettings.dryRun ? 'Enabled' : 'Disabled', inline: true },
+      { name: 'Window', value: Math.round(guildSettings.windowMs / 1000) + ' seconds', inline: true },
+      { name: 'Channel delete limit', value: String(getThreshold(guild.id, 'channel_delete')), inline: true },
+      { name: 'Channel create limit', value: String(getThreshold(guild.id, 'channel_create')), inline: true },
+      { name: 'Role delete limit', value: String(getThreshold(guild.id, 'role_delete')), inline: true },
+      { name: 'Role create limit', value: String(getThreshold(guild.id, 'role_create')), inline: true },
+      { name: 'Ban limit', value: String(getThreshold(guild.id, 'ban')), inline: true },
       { name: 'Whitelisted users', value: String(whitelist.users.length), inline: true },
       { name: 'Whitelisted roles', value: String(whitelist.roles.length), inline: true },
       { name: 'Whitelisted channels', value: String(whitelist.channels.length), inline: true },
@@ -582,15 +714,99 @@ function statusEmbed(guild) {
     );
 }
 
+function configEmbed(guild) {
+  const guildSettings = getGuildSettings(guild.id);
+  return new EmbedBuilder()
+    .setTitle('Anti-nuke configuration')
+    .setColor(0x050505)
+    .setDescription(
+      '```text\n' +
+        '+--------------------------------------+\n' +
+        '|          SERVER OVERRIDES            |\n' +
+        '+--------------------------------------+\n' +
+        '```',
+    )
+    .addFields(
+      { name: 'Window', value: Math.round(guildSettings.windowMs / 1000) + ' seconds', inline: true },
+      { name: 'Backup on risk', value: guildSettings.autoBackupOnRisk ? 'Enabled' : 'Disabled', inline: true },
+      { name: 'Dry run', value: guildSettings.dryRun ? 'Enabled' : 'Disabled', inline: true },
+      { name: 'Channel delete', value: String(getThreshold(guild.id, 'channel_delete')), inline: true },
+      { name: 'Channel create', value: String(getThreshold(guild.id, 'channel_create')), inline: true },
+      { name: 'Role delete', value: String(getThreshold(guild.id, 'role_delete')), inline: true },
+      { name: 'Role create', value: String(getThreshold(guild.id, 'role_create')), inline: true },
+      { name: 'Ban', value: String(getThreshold(guild.id, 'ban')), inline: true },
+    );
+}
+
+function auditActionLabel(action) {
+  const raw = String(action);
+  return auditActionLabels[raw] || raw.toLowerCase().replace(/_/g, ' ');
+}
+
+async function auditEmbed(guild, requestedLimit) {
+  const limit = Math.min(Math.max(Number.parseInt(requestedLimit, 10) || 10, 1), 15);
+  const auditLogs = await guild.fetchAuditLogs({ limit });
+  const lines = auditLogs.entries.map((entry) => {
+    const executor = entry.executor ? entry.executor.tag : 'unknown executor';
+    const target = entry.target ? entry.target.name || entry.target.id : 'unknown target';
+    const age = Math.max(0, Math.round((Date.now() - entry.createdTimestamp) / 1000));
+    return auditActionLabel(entry.action) + ' | ' + executor + ' | ' + target + ' | ' + age + 's ago';
+  });
+
+  return new EmbedBuilder()
+    .setTitle('Recent audit activity')
+    .setColor(0x050505)
+    .setDescription(
+      lines.length
+        ? lines.join('\n').slice(0, 3900)
+        : 'No recent audit entries were returned.',
+    )
+    .setFooter({ text: 'Audit log entries require View Audit Log permission.' });
+}
+
 async function handleWhitelistCommand(message, args) {
   if (!isAdministrator(message.member)) {
     await message.reply('Administrator permission required.');
     return;
   }
 
-  const type = whitelistNames[args.shift()?.toLowerCase()];
-  const action = args.shift()?.toLowerCase();
   const guildSettings = getGuildSettings(message.guild.id);
+  const first = args.shift()?.toLowerCase();
+
+  if (first === 'list' || !first) {
+    const lines = Object.entries(guildSettings.whitelist).map(
+      ([name, values]) => name + ': ' + (values.length ? values.join(', ') : 'none'),
+    );
+    await message.reply({
+      embeds: [helpEmbed('whitelist').addFields({ name: 'Current whitelist', value: lines.join('\n') })],
+    });
+    return;
+  }
+
+  if (first === 'clear') {
+    const scope = args.shift()?.toLowerCase();
+    if (scope === 'all') {
+      for (const listName of Object.values(whitelistNames)) {
+        guildSettings.whitelist[listName] = [];
+      }
+      saveSettings();
+      await message.reply('All whitelist entries were cleared.');
+      return;
+    }
+
+    const typeToClear = whitelistNames[scope];
+    if (!typeToClear) {
+      await message.reply('Use >whitelist clear all, or specify user, role, channel, or category.');
+      return;
+    }
+    guildSettings.whitelist[typeToClear] = [];
+    saveSettings();
+    await message.reply('Whitelist entries cleared for ' + typeToClear + '.');
+    return;
+  }
+
+  const type = whitelistNames[first];
+  const action = args.shift()?.toLowerCase();
 
   if (!type || !action || action === 'list') {
     const lines = Object.entries(guildSettings.whitelist).map(
@@ -639,8 +855,14 @@ async function handleAdminCommand(message, args) {
     return;
   }
 
+  if (action === 'test') {
+    const sent = await sendAdminTest(message.guild);
+    await message.reply('Test alert sent to ' + sent + ' configured administrator(s).');
+    return;
+  }
+
   if (!['add', 'remove'].includes(action)) {
-    await message.reply('Use >admin add <id>, >admin remove <id>, or >admin list.');
+    await message.reply('Use >admin add <id>, >admin remove <id>, >admin list, or >admin test.');
     return;
   }
 
@@ -659,6 +881,83 @@ async function handleAdminCommand(message, args) {
   }
   saveSettings();
   await message.reply('Administrator alert recipient ' + action + ': ' + id);
+}
+
+async function handleConfigCommand(message, args) {
+  if (!isAdministrator(message.member)) {
+    await message.reply('Administrator permission required.');
+    return;
+  }
+
+  const action = args.shift()?.toLowerCase();
+  const guildSettings = getGuildSettings(message.guild.id);
+
+  if (action === 'show' || !action) {
+    await message.reply({ embeds: [configEmbed(message.guild)] });
+    return;
+  }
+
+  if (action === 'threshold') {
+    const type = thresholdNames[args.shift()?.toLowerCase()];
+    const value = Number.parseInt(args.shift(), 10);
+    if (!type || !Number.isInteger(value) || value < 1 || value > 100) {
+      await message.reply(
+        'Use >config threshold <channel-delete|channel-create|role-delete|role-create|ban> <1-100>.',
+      );
+      return;
+    }
+    guildSettings.thresholds[type] = value;
+    saveSettings();
+    await message.reply('Threshold updated for ' + type + ': ' + value + '.');
+    return;
+  }
+
+  if (action === 'window') {
+    const seconds = Number.parseInt(args.shift(), 10);
+    if (!Number.isInteger(seconds) || seconds < 5 || seconds > 3600) {
+      await message.reply('Use >config window <seconds> with a value from 5 to 3600.');
+      return;
+    }
+    guildSettings.windowMs = seconds * 1000;
+    saveSettings();
+    await message.reply('Activity window updated to ' + seconds + ' seconds.');
+    return;
+  }
+
+  if (action === 'backup' || action === 'dry-run') {
+    const value = args.shift()?.toLowerCase();
+    if (!['on', 'off'].includes(value)) {
+      await message.reply('Use >config ' + action + ' on or >config ' + action + ' off.');
+      return;
+    }
+    if (action === 'backup') guildSettings.autoBackupOnRisk = value === 'on';
+    if (action === 'dry-run') guildSettings.dryRun = value === 'on';
+    saveSettings();
+    await message.reply(
+      (action === 'backup' ? 'Risk backups' : 'Dry run mode') +
+        ' ' +
+        (value === 'on' ? 'enabled.' : 'disabled.'),
+    );
+    return;
+  }
+
+  await message.reply(
+    'Use >config show, >config threshold, >config window, >config backup, or >config dry-run.',
+  );
+}
+
+async function handleAuditCommand(message, args) {
+  if (!isAdministrator(message.member)) {
+    await message.reply('Administrator permission required.');
+    return;
+  }
+
+  try {
+    await message.reply({ embeds: [await auditEmbed(message.guild, args.shift())] });
+  } catch (error) {
+    console.error('Could not read recent audit activity:', error.message);
+    await message.reply('Could not read the audit log. Check the bot View Audit Log permission.');
+  }
 }
 
 async function handleBackupCommand(message, args) {
@@ -830,13 +1129,39 @@ client.on('messageCreate', async (message) => {
       guildSettings.enabled = subcommand === 'enable';
       saveSettings();
       await message.reply('Automatic anti-nuke mitigation ' + (guildSettings.enabled ? 'enabled.' : 'disabled.'));
+    } else if (subcommand === 'dry-run') {
+      if (!isAdministrator(message.member)) {
+        await message.reply('Administrator permission required.');
+        return;
+      }
+      const value = args.shift()?.toLowerCase();
+      if (!['on', 'off'].includes(value)) {
+        await message.reply('Use >antinuke dry-run on or >antinuke dry-run off.');
+        return;
+      }
+      guildSettings.dryRun = value === 'on';
+      saveSettings();
+      await message.reply('Dry run mode ' + (guildSettings.dryRun ? 'enabled.' : 'disabled.'));
+    } else if (subcommand === 'reset') {
+      if (!isAdministrator(message.member)) {
+        await message.reply('Administrator permission required.');
+        return;
+      }
+      resetGuildState(message.guild.id);
+      await message.reply('Current activity counters and pending mitigations were reset.');
     } else {
-      await message.reply('Use >antinuke status, >antinuke enable, or >antinuke disable.');
+      await message.reply(
+        'Use >antinuke status, >antinuke enable, >antinuke disable, >antinuke dry-run, or >antinuke reset.',
+      );
     }
   } else if (command === 'whitelist' || command === 'wl') {
     await handleWhitelistCommand(message, args);
   } else if (command === 'admin') {
     await handleAdminCommand(message, args);
+  } else if (command === 'config') {
+    await handleConfigCommand(message, args);
+  } else if (command === 'audit' || command === 'logs') {
+    await handleAuditCommand(message, args);
   } else if (command === 'backup') {
     await handleBackupCommand(message, args);
   }
