@@ -7,6 +7,7 @@ A Discord.js anti-nuke bot that watches destructive server actions, attributes t
 - Channel creation and deletion
 - Role creation and deletion
 - Member bans
+- Member kicks
 - Bulk message-delete logging
 - Audit-log attribution with retries
 - Separate counters for every action type
@@ -22,6 +23,8 @@ A Discord.js anti-nuke bot that watches destructive server actions, attributes t
 - Emergency server lockdown mode
 - Owner-only DM security logs for moderation events and deleted message media
 - Runtime activity state restored after clean restarts
+- Red two-page command-center help with button navigation
+- Interactive administrator dashboard for thresholds, time windows, protection state, and bot status
 
 The default command prefix is `>`.
 
@@ -61,13 +64,14 @@ The bot cannot remove a role above its highest role. It cannot undo already-dele
 7. Run `>setup` in the channel where security alerts should be posted.
 8. Add alert recipients with `>admin add <discord-user-id>`.
 
-Whitelists, alert settings, enable state, and server configuration are saved in `data/settings.json`. Runtime activity counters are saved in `data/runtime.json` during shutdown and restored on startup. Automatic and manual backups are saved in `data/backups/`. These data paths are ignored by Git.
+Whitelists, alert settings, enable state, server configuration, and the global bot status are saved in `data/settings.json`. Runtime activity counters are saved in `data/runtime.json` during shutdown and restored on startup. Automatic and manual backups are saved in `data/backups/`. These data paths are ignored by Git.
 
 ## Commands
 
 ### Protection
 
-- `>help` - Show the black command-center help embed.
+- `>dashboard` - Open the administrator dashboard for thresholds, time windows, protection state, and bot status.
+- `>help` - Show the red two-page command-center help; press `🙏🏻` to open page two.
 - `>help whitelist` - Show whitelist syntax.
 - `>help backup` - Show backup syntax.
 - `>help admin` - Show administrator alert syntax.
@@ -137,7 +141,7 @@ Risk alerts and security logs are sent by DM to `OWNER_USER_ID`, or to each serv
 - `>config backup on|off` - Enable or disable automatic risk backups.
 - `>config dry-run on|off` - Enable or disable dry-run mode.
 
-Supported threshold types are `channel-delete`, `channel-create`, `role-delete`, `role-create`, and `ban`.
+Supported threshold types are `channel-delete`, `channel-create`, `role-delete`, `role-create`, `kick`, and `ban`. The dashboard also accepts `mass-create` as a shortcut for channel creation.
 
 Use dry-run mode before changing thresholds in a live server. It continues to record risk and create configured backups, but it does not remove roles.
 
