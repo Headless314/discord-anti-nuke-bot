@@ -1008,7 +1008,6 @@ function statusEmbed(guild) {
   const whitelist = guildSettings.whitelist;
   return new EmbedBuilder()
     .setTitle('Anti-Nuke Status')
-    .setColor(EMBED_BLACK)
     .addFields(
       { name: 'Automatic mitigation', value: guildSettings.enabled ? 'Enabled' : 'Disabled', inline: true },
       { name: 'Log channel', value: getLogChannelId(guild.id) ? '<#' + getLogChannelId(guild.id) + '>' : 'Not configured', inline: true },
@@ -1043,7 +1042,6 @@ async function handleUtilityCommand(message, command, args) {
     const roles = guild.roles.cache.filter((role) => role.id !== guild.id);
     const embed = new EmbedBuilder()
       .setTitle(guild.name)
-      .setColor(EMBED_BLACK)
       .addFields(
         { name: 'Owner', value: owner ? owner.user.tag : guild.ownerId, inline: true },
         { name: 'Members', value: String(guild.memberCount), inline: true },
@@ -1068,7 +1066,6 @@ async function handleUtilityCommand(message, command, args) {
       : [];
     const embed = new EmbedBuilder()
       .setTitle('User information')
-      .setColor(EMBED_BLACK)
       .setThumbnail(requestedUser.displayAvatarURL({ size: 256 }))
       .addFields(
         { name: 'User', value: requestedUser.tag, inline: true },
@@ -1088,7 +1085,6 @@ async function handleUtilityCommand(message, command, args) {
       message.channel;
     const embed = new EmbedBuilder()
       .setTitle('Channel information')
-      .setColor(EMBED_BLACK)
       .addFields(
         { name: 'Name', value: channel.name || 'Unnamed', inline: true },
         { name: 'Type', value: String(channel.type), inline: true },
@@ -1111,7 +1107,6 @@ async function handleUtilityCommand(message, command, args) {
     }
     const embed = new EmbedBuilder()
       .setTitle('Role information')
-      .setColor(EMBED_BLACK)
       .addFields(
         { name: 'Name', value: role.name, inline: true },
         { name: 'Role ID', value: role.id, inline: true },
@@ -1217,7 +1212,6 @@ function configEmbed(guild) {
   const guildSettings = getGuildSettings(guild.id);
   return new EmbedBuilder()
     .setTitle('Anti-Nuke Configuration')
-    .setColor(EMBED_BLACK)
     .addFields(
       { name: 'Activity window', value: Math.round(guildSettings.windowMs / 1000) + ' seconds', inline: true },
       { name: 'Backup on risk', value: guildSettings.autoBackupOnRisk ? 'Enabled' : 'Disabled', inline: true },
@@ -1235,7 +1229,6 @@ function dashboardEmbed(guild) {
   const guildSettings = getGuildSettings(guild.id);
   return new EmbedBuilder()
     .setTitle('Anti-Nuke Dashboard')
-    .setColor(EMBED_BLACK)
     .addFields(
       { name: 'Protection', value: guildSettings.enabled ? 'Enabled' : 'Disabled', inline: true },
       { name: 'Dry run', value: guildSettings.dryRun ? 'Enabled' : 'Disabled', inline: true },
@@ -1329,7 +1322,6 @@ async function auditEmbed(guild, requestedLimit) {
 
   return new EmbedBuilder()
     .setTitle('Recent audit activity')
-    .setColor(EMBED_BLACK)
     .setDescription(
       lines.length
         ? lines.join('\n').slice(0, 3900)
