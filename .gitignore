@@ -4,3 +4,4 @@ node_modules/
 *.log
 data/settings.json
 data/backups/
+data/runtime.json
