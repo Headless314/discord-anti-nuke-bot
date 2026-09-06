@@ -18,6 +18,8 @@ A Discord.js anti-nuke bot that watches destructive server actions, attributes t
 - Persistent user, role, channel, and category whitelists
 - Structure backups before automatic mitigation
 - Direct administrator alerts by Discord user ID
+- Server utility and moderation commands with permission checks
+- Emergency server lockdown mode
 
 The default command prefix is `>`.
 
@@ -67,6 +69,7 @@ The log channel, whitelists, alert recipients, and enable state are saved in `da
 - `>help whitelist` - Show whitelist syntax.
 - `>help backup` - Show backup syntax.
 - `>help admin` - Show administrator alert syntax.
+- `>help utility` - Show utility and moderation command syntax.
 - `>status` - Show current server protection status.
 - `>antinuke status` - Show current server protection status.
 - `>antinuke enable` - Enable automatic mitigation.
@@ -74,6 +77,17 @@ The log channel, whitelists, alert recipients, and enable state are saved in `da
 - `>antinuke dry-run on|off` - Detect and log risk without removing roles.
 - `>antinuke reset` - Clear current activity counters and pending mitigations.
 - `>setup` - Save the current channel as the security log channel.
+
+### Utility and moderation
+
+- `>ping` - Check WebSocket latency.
+- `>serverinfo` - Show server owner, member count, roles, channels, and creation date.
+- `>userinfo [@user]` - Show account, join date, and server roles.
+- `>channelinfo [#channel]` - Show channel metadata.
+- `>roleinfo <@role>` - Show role metadata and permissions.
+- `>purge <1-100>` - Delete recent messages; requires Manage Messages.
+- `>slowmode <0-21600>` - Read or set the current channel slowmode; requires Manage Channels.
+- `>lockdown on|off|status` - Deny or restore @everyone message sending across manageable text channels; requires Administrator.
 
 ### Whitelists
 
