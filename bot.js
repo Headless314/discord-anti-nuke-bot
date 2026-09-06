@@ -40,6 +40,7 @@ class LowercaseEmbedBuilder extends DiscordEmbedBuilder {
           ...field,
           ...(field.name !== undefined ? { name: lowercaseEmbedText(field.name) } : {}),
           ...(field.value !== undefined ? { value: lowercaseEmbedText(field.value) } : {}),
+          inline: true,
         };
       });
     return super.addFields(...normalizedFields);
@@ -1837,6 +1838,7 @@ client.on('messageCreate', async (message) => {
 
   const commandText = message.content.slice(config.prefix.length).trim();
   if (!commandText) return;
+  await message.delete().catch(() => {});
   const args = commandText.split(/ +/);
   const command = args.shift().toLowerCase();
 
