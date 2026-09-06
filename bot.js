@@ -35,6 +35,7 @@ const booleanFromEnv = (name, fallback) => {
 
 const config = {
   token: process.env.DISCORD_TOKEN,
+  ownerUserId: process.env.OWNER_USER_ID || null,
   prefix: process.env.COMMAND_PREFIX || '>',
   defaultLogChannelId: process.env.LOG_CHANNEL_ID || null,
   windowMs: numberFromEnv('NUKE_WINDOW_MS', 30_000, 1_000),
@@ -56,6 +57,7 @@ const config = {
 
 const dataDirectory = path.join(__dirname, 'data');
 const settingsFile = path.join(dataDirectory, 'settings.json');
+const runtimeFile = path.join(dataDirectory, 'runtime.json');
 const backupDirectory = path.join(dataDirectory, 'backups');
 const maxBackupsPerGuild = 25;
 const snowflakePattern = /^\d{15,20}$/;
@@ -175,27 +177,65 @@ function normalizeId(value) {
   return snowflakePattern.test(id) ? id : null;
 }
 
+
+function getOwnerUserId(guild) {
+  return config.ownerUserId || guild.ownerId;
+}
+
+function isGuildOwner(message) {
+  return message.author.id === getOwnerUserId(message.guild);
+}
+
+function sanitizeLogText(value) {
+  return String(value ?? '[empty]')
+    .replace(/@everyone/g, '@ everyone')
+    .replace(/@here/g, '@ here')
+    .replace(/<@&?(\d+)>/g, '[mention:$1]');
+}
+
+function splitLogMessage(content, maxLength = 1900) {
+  const text = String(content);
+  const chunks = [];
+  for (let index = 0; index < text.length; index += maxLength) {
+    chunks.push(text.slice(index, index + maxLength));
+  }
+  return chunks.length ? chunks : ['[empty log]'];
+}
+
+async function sendOwnerMessage(guild, content) {
+  const ownerId = getOwnerUserId(guild);
+  if (!ownerId) return false;
+  const owner = await client.users.fetch(ownerId).catch((error) => {
+    console.error('Could not resolve the configured owner for DM logging:', error.message);
+    return null;
+  });
+  if (!owner) return false;
+
+  for (const chunk of splitLogMessage(content)) {
+    await owner
+      .send({ content: chunk, allowedMentions: { parse: [] } })
+      .catch((error) => console.error('Could not DM the server owner:', error.message));
+  }
+  return true;
+}
+
 function isAdministrator(member) {
   return Boolean(member && member.permissions.has(PermissionFlagsBits.Administrator));
 }
 
 async function logAction(guild, title, description, color = 0x050505) {
-  const logChannelId = getLogChannelId(guild.id);
-  if (!logChannelId) return;
-
-  const logChannel = await client.channels.fetch(logChannelId).catch(() => null);
-  if (!logChannel || !logChannel.isTextBased()) return;
-
-  const embed = new EmbedBuilder()
-    .setTitle(title)
-    .setDescription(description)
-    .setColor(color)
-    .setTimestamp()
-    .setFooter({ text: 'Anti-nuke security log' });
-
-  await logChannel.send({ embeds: [embed] }).catch((error) => {
-    console.error('Could not send security log:', error.message);
-  });
+  const logMessage =
+    '[Anti-nuke security log]\n' +
+    'Server: ' +
+    sanitizeLogText(guild.name) +
+    ' (' +
+    guild.id +
+    ')\n' +
+    'Title: ' +
+    sanitizeLogText(title) +
+    '\n' +
+    sanitizeLogText(description);
+  await sendOwnerMessage(guild, logMessage);
 }
 
 async function findExecutor(guild, action, targetId) {
@@ -252,6 +292,53 @@ async function isWhitelisted(guild, executorId, target, type) {
 
 const activity = new Collection();
 const mitigations = new Collection();
+
+
+function saveRuntimeState() {
+  const now = Date.now();
+  const persistedActivity = [...activity.entries()]
+    .filter(([key, record]) => {
+      const guildId = key.split(':')[0];
+      return (
+        record &&
+        Number.isInteger(record.count) &&
+        Number.isInteger(record.startedAt) &&
+        now - record.startedAt <= getWindowMs(guildId)
+      );
+    })
+    .map(([key, record]) => ({ key, count: record.count, startedAt: record.startedAt }));
+
+  fs.mkdirSync(dataDirectory, { recursive: true });
+  fs.writeFileSync(
+    runtimeFile,
+    JSON.stringify({ savedAt: new Date().toISOString(), activity: persistedActivity }, null, 2) + '\n',
+    { mode: 0o600 },
+  );
+}
+
+function restoreRuntimeState() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(runtimeFile, 'utf8'));
+    if (!saved || !Array.isArray(saved.activity)) return;
+    const now = Date.now();
+    for (const record of saved.activity) {
+      if (!record || typeof record.key !== 'string') continue;
+      const guildId = record.key.split(':')[0];
+      if (
+        Number.isInteger(record.count) &&
+        Number.isInteger(record.startedAt) &&
+        now - record.startedAt <= getWindowMs(guildId)
+      ) {
+        activity.set(record.key, { count: record.count, startedAt: record.startedAt });
+      }
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error('Could not restore runtime state:', error.message);
+  }
+}
+
+restoreRuntimeState();
+
 
 function trackActivity(userId, guildId, type) {
   const now = Date.now();
@@ -454,9 +541,7 @@ function getBackupPath(guildId, fileName) {
 async function notifyAdmins(guild, reason, executorId, backupName) {
   const guildSettings = getGuildSettings(guild.id);
   const now = Date.now();
-  if (guildSettings.lastRiskAlertAt && now - guildSettings.lastRiskAlertAt < 60_000) {
-    return;
-  }
+  if (guildSettings.lastRiskAlertAt && now - guildSettings.lastRiskAlertAt < 60_000) return;
 
   guildSettings.lastRiskAlertAt = now;
   try {
@@ -465,31 +550,19 @@ async function notifyAdmins(guild, reason, executorId, backupName) {
     console.error('Could not save risk alert state:', error.message);
   }
 
-  const recipients = [...new Set(guildSettings.alertAdminIds)].slice(0, 10);
-  if (recipients.length === 0) return;
-
-  const message =
-    'ANTI-NUKE ALERT\n' +
-    'Server: ' +
-    guild.name +
-    '\nReason: ' +
-    reason +
-    '\nExecutor: ' +
-    executorId +
-    '\nBackup: ' +
-    (backupName || 'not created') +
-    '\nMode: ' +
-    (getGuildSettings(guild.id).dryRun ? 'dry run' : 'active mitigation') +
-    '\nReview the server audit log immediately.';
-
-  for (const userId of recipients) {
-    const member = await guild.members.fetch(userId).catch(() => null);
-    if (!member || (!isAdministrator(member) && member.id !== guild.ownerId)) continue;
-    await member.send(message).catch((error) => {
-      console.error('Could not notify administrator ' + userId + ':', error.message);
-    });
-    await wait(300);
-  }
+  await sendOwnerMessage(
+    guild,
+    '[ANTI-NUKE ALERT]\n' +
+      'Reason: ' +
+      sanitizeLogText(reason) +
+      '\nExecutor: ' +
+      executorId +
+      '\nBackup: ' +
+      (backupName || 'not created') +
+      '\nMode: ' +
+      (getGuildSettings(guild.id).dryRun ? 'dry run' : 'active mitigation') +
+      '\nReview the server audit log immediately.',
+  );
 }
 
 async function sendAdminTest(guild) {
@@ -541,6 +614,7 @@ async function recordActivity({
     return;
   }
 
+  if (executor.bot) return;
   if (await isWhitelisted(guild, executor.id, target, type)) return;
 
   const count = trackActivity(executor.id, guild.id, type);
@@ -598,6 +672,7 @@ function helpEmbed(command) {
     return embed.addFields({
       name: 'Whitelist commands',
       value:
+        '`>whitelist add @user` - Owner-only shorthand\n' +
         '`>whitelist user add <id>`\n' +
         '`>whitelist user remove <id>`\n' +
         '`>whitelist channel add <id>`\n' +
@@ -989,6 +1064,34 @@ async function handleWhitelistCommand(message, args) {
   const guildSettings = getGuildSettings(message.guild.id);
   const first = args.shift()?.toLowerCase();
 
+  const mutationRequested =
+    first === 'clear' ||
+    first === 'add' ||
+    first === 'remove' ||
+    ['user', 'users', 'role', 'roles', 'channel', 'channels', 'category', 'categories'].includes(first) &&
+      ['add', 'remove'].includes(args[0]?.toLowerCase());
+  if (mutationRequested && !isGuildOwner(message)) {
+    await message.reply('Only the configured server owner can change the whitelist.');
+    return;
+  }
+
+  if (first === 'add' || first === 'remove') {
+    const id = normalizeId(message.mentions.users.first()?.id || args.shift());
+    if (!id) {
+      await message.reply('Use >whitelist add @user or >whitelist remove @user.');
+      return;
+    }
+    const list = guildSettings.whitelist.users;
+    if (first === 'add' && !list.includes(id)) list.push(id);
+    if (first === 'remove') {
+      const index = list.indexOf(id);
+      if (index !== -1) list.splice(index, 1);
+    }
+    saveSettings();
+    await message.reply('User whitelist ' + first + ' completed: ' + id);
+    return;
+  }
+
   if (first === 'list' || !first) {
     const lines = Object.entries(guildSettings.whitelist).map(
       ([name, values]) => name + ': ' + (values.length ? values.join(', ') : 'none'),
@@ -1236,16 +1339,46 @@ client.once('ready', () => {
   client.user.setActivity('security monitoring', { type: 'WATCHING' });
 });
 
+function formatDeletedMessage(message) {
+  const attachmentLines = [...(message.attachments?.values() || [])].map((attachment) => {
+    const type = attachment.contentType || 'attachment';
+    const voiceLabel = type.startsWith('audio/') ? 'voice/audio' : type;
+    return '- ' + (attachment.name || 'unnamed file') + ' [' + voiceLabel + '] ' + attachment.url;
+  });
+  const stickerLines = [...(message.stickers?.values() || [])].map(
+    (sticker) => '- sticker: ' + sticker.name + ' (' + sticker.id + ')',
+  );
+  const media = [...attachmentLines, ...stickerLines];
+  return (
+    '[Deleted message]\n' +
+    'Server: ' +
+    sanitizeLogText(message.guild.name) + '\n' +
+    'Channel: #' +
+    sanitizeLogText(message.channel?.name || message.channelId || 'unknown') + '\n' +
+    'Author: ' +
+    sanitizeLogText(message.author?.tag || message.author?.id || 'unknown') + '\n' +
+    'Message ID: ' +
+    message.id + '\n' +
+    'Content: ' +
+    sanitizeLogText(message.content || '[no text content]') +
+    (media.length ? '\nMedia:\n' + media.join('\n') : '\nMedia: none')
+  );
+}
+
+client.on('messageDelete', async (message) => {
+  if (!message.guild || message.author?.bot) return;
+  await sendOwnerMessage(message.guild, formatDeletedMessage(message));
+});
+
 client.on('messageDeleteBulk', async (messages, channel) => {
-  if (!channel.guild || messages.size <= 10) return;
-  await logAction(
+  if (!channel.guild) return;
+  const entries = [...messages.values()]
+    .filter((message) => !message.author?.bot)
+    .map(formatDeletedMessage);
+  if (!entries.length) return;
+  await sendOwnerMessage(
     channel.guild,
-    'Bulk delete',
-    messages.size +
-      ' messages deleted in <#' +
-      channel.id +
-      '>.\nThe message event does not reliably identify the actor. Review the server audit log.',
-    0x050505,
+    '[Bulk message deletion]\nServer: ' + sanitizeLogText(channel.guild.name) + '\n\n' + entries.join('\n\n'),
   );
 });
 
@@ -1387,6 +1520,26 @@ client.on('messageCreate', async (message) => {
 
 client.on('error', (error) => console.error('Discord client error:', error.message));
 process.on('unhandledRejection', (error) => console.error('Unhandled promise rejection:', error));
+
+let shutdownStarted = false;
+async function persistAndShutdown(signal) {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  try {
+    saveSettings();
+    saveRuntimeState();
+  } catch (error) {
+    console.error('Could not persist data during ' + signal + ':', error.message);
+  }
+  if (client.isReady()) client.destroy();
+  process.exit(0);
+}
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => {
+    persistAndShutdown(signal);
+  });
+}
 
 if (!config.token) {
   console.error('Missing DISCORD_TOKEN. Copy .env.example to .env and add your bot token.');
