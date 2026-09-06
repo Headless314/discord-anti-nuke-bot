@@ -20,6 +20,8 @@ A Discord.js anti-nuke bot that watches destructive server actions, attributes t
 - Direct administrator alerts by Discord user ID
 - Server utility and moderation commands with permission checks
 - Emergency server lockdown mode
+- Owner-only DM security logs for moderation events and deleted message media
+- Runtime activity state restored after clean restarts
 
 The default command prefix is `>`.
 
@@ -59,7 +61,7 @@ The bot cannot remove a role above its highest role. It cannot undo already-dele
 7. Run `>setup` in the channel where security alerts should be posted.
 8. Add alert recipients with `>admin add <discord-user-id>`.
 
-The log channel, whitelists, alert recipients, and enable state are saved in `data/settings.json`. Automatic and manual backups are saved in `data/backups/`. Both paths are ignored by Git.
+Whitelists, alert settings, enable state, and server configuration are saved in `data/settings.json`. Runtime activity counters are saved in `data/runtime.json` during shutdown and restored on startup. Automatic and manual backups are saved in `data/backups/`. These data paths are ignored by Git.
 
 ## Commands
 
@@ -89,6 +91,8 @@ The log channel, whitelists, alert recipients, and enable state are saved in `da
 - `>slowmode <0-21600>` - Read or set the current channel slowmode; requires Manage Channels.
 - `>lockdown on|off|status` - Deny or restore @everyone message sending across manageable text channels; requires Administrator.
 
+Whitelist changes are owner-only. Both `>whitelist add @user` and `>whitelist user add @user` are supported; Discord mentions are accepted.
+
 ### Whitelists
 
 - `>whitelist user add <id>`
@@ -114,7 +118,7 @@ IDs can be copied from Discord with Developer Mode enabled. Mentions such as `<@
 - `>admin list` - List configured recipients.
 - `>admin test` - Send a test notification to configured recipients.
 
-When a configured recipient is a server administrator or the owner, the bot sends one direct alert per risk window. Notifications are capped at ten recipients and rate-limited to avoid DM spam. No alert is sent until a recipient is explicitly configured.
+Risk alerts and security logs are sent by DM to `OWNER_USER_ID`, or to each server owner when that setting is blank. Deleted message logs include text plus image, video, audio, voice-message, and other attachment URLs. Bot-authored actions and bot-authored deleted messages are ignored.
 
 ### Backups
 
@@ -147,5 +151,6 @@ Backups include guild metadata, roles, role permissions, channels, categories, p
 - `CHANNEL_DELETE_THRESHOLD`, `CHANNEL_CREATE_THRESHOLD`, `ROLE_DELETE_THRESHOLD`, `ROLE_CREATE_THRESHOLD`, `BAN_THRESHOLD`: per-action thresholds.
 - `TRUSTED_USER_IDS`: comma-separated IDs excluded from automatic action.
 - `LOG_CHANNEL_ID`: optional fallback log channel for servers that have not run `>setup`.
+- `OWNER_USER_ID`: optional Discord user ID that receives DM logs and owns whitelist changes; if blank, each server owner is used.
 
 Keep `.env` and `data/settings.json` private.
