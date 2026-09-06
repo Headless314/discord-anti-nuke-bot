@@ -149,6 +149,147 @@ function applyBotStatus() {
   client.user.setActivity(status.text, { type: BOT_STATUS_TYPES[status.type] });
 }
 
+
+const mediaRotationTimers = { avatar: null, banner: null };
+
+function getMediaRotation(kind) {
+  const saved = settings.__rotatingMedia && settings.__rotatingMedia[kind];
+  if (Array.isArray(saved)) return { items: saved, index: 0 };
+  if (!saved || !Array.isArray(saved.items)) return { items: [], index: 0 };
+  return {
+    items: saved.items.filter((item) => item && typeof item.path === 'string'),
+    index: Number.isInteger(saved.index) && saved.index >= 0 ? saved.index : 0,
+  };
+}
+
+function getMediaPath(item) {
+  if (!item || typeof item.path !== 'string') return null;
+  const root = path.resolve(dataDirectory) + path.sep;
+  const candidate = path.resolve(__dirname, item.path);
+  return candidate.startsWith(root) ? candidate : null;
+}
+
+function isImageAttachment(attachment) {
+  const contentType = String(attachment.contentType || '').toLowerCase();
+  const name = String(attachment.name || attachment.url || '').toLowerCase();
+  return contentType.startsWith('image/') || /\.(png|jpe?g|gif|webp)$/.test(name);
+}
+
+function mediaExtension(attachment) {
+  const contentType = String(attachment.contentType || '').toLowerCase();
+  const typeMap = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+  if (typeMap[contentType]) return typeMap[contentType];
+  const match = String(attachment.name || '').match(/\.(png|jpe?g|gif|webp)$/i);
+  return match ? (match[1].toLowerCase() === 'jpeg' ? 'jpg' : match[1].toLowerCase()) : 'png';
+}
+
+async function applyRotatingMedia(kind) {
+  if (!client.user) return false;
+  const rotation = getMediaRotation(kind);
+  const items = rotation.items.filter((item) => getMediaPath(item) && fs.existsSync(getMediaPath(item)));
+  if (!items.length) return false;
+  const index = rotation.index % items.length;
+  const item = items[index];
+  const filePath = getMediaPath(item);
+  try {
+    const buffer = fs.readFileSync(filePath);
+    if (kind === 'avatar') await client.user.setAvatar(buffer);
+    else await client.user.setBanner(buffer);
+    settings.__rotatingMedia = settings.__rotatingMedia || {};
+    settings.__rotatingMedia[kind] = { items, index: (index + 1) % items.length };
+    saveSettings();
+    return true;
+  } catch (error) {
+    console.error('Could not rotate ' + kind + ':', error.message);
+    return false;
+  }
+}
+
+async function startMediaRotation(kind) {
+  if (mediaRotationTimers[kind]) clearInterval(mediaRotationTimers[kind]);
+  if (!client.user) return;
+  await applyRotatingMedia(kind);
+  mediaRotationTimers[kind] = setInterval(() => {
+    applyRotatingMedia(kind).catch((error) => console.error('Media rotation error:', error.message));
+  }, 60 * 60 * 1000);
+}
+
+function lastMediaCommandTimestamp(messages, message, kind) {
+  let timestamp = -1;
+  const commandText = config.prefix + kind;
+  for (const candidate of messages) {
+    if (candidate.id === message.id || candidate.author.id !== message.author.id) continue;
+    const firstToken = String(candidate.content || '').trim().split(/\s+/)[0].toLowerCase();
+    if (firstToken === commandText.toLowerCase()) timestamp = Math.max(timestamp, candidate.createdTimestamp);
+  }
+  return timestamp;
+}
+
+async function collectDirectMessageAttachments(message, kind) {
+  const history = await message.channel.messages.fetch({ limit: 100 });
+  const messages = [...history.values()].sort((left, right) => left.createdTimestamp - right.createdTimestamp);
+  const previousCommandAt = lastMediaCommandTimestamp(messages, message, kind);
+  return messages
+    .filter((candidate) => candidate.author.id === message.author.id && (candidate.id === message.id || candidate.createdTimestamp > previousCommandAt))
+    .flatMap((candidate) => [...candidate.attachments.values()])
+    .filter(isImageAttachment)
+    .slice(-25);
+}
+
+async function saveRotatingMediaFromDm(message, kind) {
+  const attachments = await collectDirectMessageAttachments(message, kind);
+  if (!attachments.length) {
+    await message.reply('Send one or more image attachments in this DM, then send ' + config.prefix + kind + '.');
+    return;
+  }
+
+  const directory = path.join(dataDirectory, 'rotating-assets', kind);
+  fs.mkdirSync(directory, { recursive: true });
+  const savedItems = [];
+  try {
+    for (let index = 0; index < attachments.length; index += 1) {
+      const attachment = attachments[index];
+      const response = await fetch(attachment.url);
+      if (!response.ok) throw new Error('Attachment download returned HTTP ' + response.status);
+      const filePath = path.join(directory, Date.now() + '-' + index + '.' + mediaExtension(attachment));
+      fs.writeFileSync(filePath, Buffer.from(await response.arrayBuffer()), { mode: 0o600 });
+      savedItems.push({ path: path.relative(__dirname, filePath), name: attachment.name || 'image' });
+    }
+
+    const oldRotation = getMediaRotation(kind);
+    const newPaths = new Set(savedItems.map((item) => getMediaPath(item)));
+    for (const oldItem of oldRotation.items) {
+      const oldPath = getMediaPath(oldItem);
+      if (oldPath && !newPaths.has(oldPath) && fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+    }
+
+    settings.__rotatingMedia = settings.__rotatingMedia || {};
+    settings.__rotatingMedia[kind] = { items: savedItems, index: 0 };
+    saveSettings();
+    await startMediaRotation(kind);
+    await message.reply('Saved ' + savedItems.length + ' ' + kind + ' image(s). Rotation will change every hour.');
+  } catch (error) {
+    for (const item of savedItems) {
+      const filePath = getMediaPath(item);
+      if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+    await message.reply('Could not save the ' + kind + ' images: ' + error.message);
+  }
+}
+
+async function handleDirectMessageCommand(message) {
+  if (!config.ownerUserId || message.author.id !== config.ownerUserId) return;
+  const commandText = message.content.slice(config.prefix.length).trim();
+  if (!commandText) return;
+  const args = commandText.split(/ +/);
+  const command = args.shift().toLowerCase();
+  if (command === 'pfp' || command === 'avatar') {
+    await saveRotatingMediaFromDm(message, 'avatar');
+  } else if (command === 'banner') {
+    await saveRotatingMediaFromDm(message, 'banner');
+  }
+}
+
 function getGuildSettings(guildId) {
   const guildSettings = settings[guildId] || {};
   guildSettings.enabled = guildSettings.enabled !== false;
@@ -701,7 +842,7 @@ function helpEmbed(command, page = 1) {
 
   if (command === 'whitelist' || command === 'wl') {
     return embed.addFields({
-      name: '🔐 Whitelist Commands',
+      name: 'Whitelist Commands',
       value:
         commandText('>whitelist add @user') + ' - Owner-only shorthand\n' +
         commandText('>whitelist user add <id>') + '\n' +
@@ -715,7 +856,7 @@ function helpEmbed(command, page = 1) {
 
   if (command === 'backup') {
     return embed.addFields({
-      name: '💾 Backup Commands',
+      name: 'Backup Commands',
       value:
         commandText('>backup create') + ' - Save server structure\n' +
         commandText('>backup list') + ' - List this server backups\n' +
@@ -725,7 +866,7 @@ function helpEmbed(command, page = 1) {
 
   if (command === 'admin') {
     return embed.addFields({
-      name: '📣 Administrator Alerts',
+      name: 'Administrator Alerts',
       value:
         commandText('>admin add <id>') + ' - Add an administrator alert recipient\n' +
         commandText('>admin remove <id>') + ' - Remove a recipient\n' +
@@ -736,7 +877,7 @@ function helpEmbed(command, page = 1) {
 
   if (command === 'audit' || command === 'logs') {
     return embed.addFields({
-      name: '📋 Audit Commands',
+      name: 'Audit Commands',
       value:
         commandText('>audit recent') + ' - Show recent server audit entries\n' +
         commandText('>audit recent 15') + ' - Show up to 15 entries',
@@ -745,7 +886,7 @@ function helpEmbed(command, page = 1) {
 
   if (command === 'utility' || command === 'tools') {
     return embed.addFields({
-      name: '🛠️ Utility and Moderation Commands',
+      name: 'Utility and Moderation Commands',
       value:
         commandText('>ping') + ' - Check bot latency\n' +
         commandText('>serverinfo') + ' - Show server details\n' +
@@ -760,7 +901,7 @@ function helpEmbed(command, page = 1) {
 
   if (command === 'config') {
     return embed.addFields({
-      name: '⚙️ Configuration Commands',
+      name: 'Configuration Commands',
       value:
         commandText('>config show') + ' - Show server overrides\n' +
         commandText('>config threshold <type> <number>') + '\n' +
@@ -776,7 +917,7 @@ function helpEmbed(command, page = 1) {
   if (pageNumber === 1) {
     return embed.addFields(
       {
-        name: '🛡️ Protection',
+        name: 'Protection',
         value:
           commandText('>antinuke status') + ' - Show protection status\n' +
           commandText('>antinuke enable') + ' - Enable automatic mitigation\n' +
@@ -786,13 +927,13 @@ function helpEmbed(command, page = 1) {
           commandText('>setup') + ' - Save this channel for security logs',
       },
       {
-        name: '📊 Dashboard',
+        name: 'Dashboard',
         value:
           commandText('>dashboard') + ' - Open the interactive control panel\n' +
           commandText('>status') + ' - Alias for ' + commandText('>antinuke status'),
       },
       {
-        name: '🔐 Access Control',
+        name: 'Access Control',
         value:
           commandText('>whitelist ...') + ' - Manage trusted users, roles, channels, and categories\n' +
           commandText('>admin ...') + ' - Manage risk alert recipients',
@@ -802,20 +943,20 @@ function helpEmbed(command, page = 1) {
 
   return embed.addFields(
     {
-      name: '💾 Backups',
+      name: 'Backups',
       value:
         commandText('>backup create') + ' - Snapshot roles, channels, categories, and overwrites\n' +
         commandText('>backup list') + ' - List saved snapshots\n' +
         commandText('>backup inspect <file>') + ' - Inspect a snapshot',
     },
     {
-      name: '🛠️ Utilities',
+      name: 'Utilities',
       value:
         commandText('>ping') + '  ' + commandText('>serverinfo') + '  ' + commandText('>userinfo') + '  ' + commandText('>channelinfo') + '\n' +
         commandText('>roleinfo') + '  ' + commandText('>purge') + '  ' + commandText('>slowmode') + '  ' + commandText('>lockdown'),
     },
     {
-      name: '⚙️ Configuration',
+      name: 'Configuration',
       value:
         commandText('>config show') + ' - Show server overrides\n' +
         commandText('>config threshold <type> <number>') + '\n' +
@@ -824,7 +965,7 @@ function helpEmbed(command, page = 1) {
         commandText('>config dry-run on|off'),
     },
     {
-      name: '📚 Detailed Help',
+      name: 'Detailed Help',
       value:
         commandText('>help whitelist') + '  ' + commandText('>help backup') + '  ' + commandText('>help admin') + '\n' +
         commandText('>help audit') + '  ' + commandText('>help config') + '  ' + commandText('>help utility'),
@@ -1095,7 +1236,7 @@ function dashboardComponents() {
 function helpNavigation(page) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('help:page:1').setLabel('⬅️').setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
+      new ButtonBuilder().setCustomId('help:page:1').setLabel('Back').setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
       new ButtonBuilder().setCustomId('help:page:2').setLabel('🙏🏻').setStyle(ButtonStyle.Danger).setDisabled(page === 2),
     ),
   ];
@@ -1444,9 +1585,11 @@ async function handleBackupCommand(message, args) {
   await message.reply('Use >backup create, >backup list, or >backup inspect <file>.');
 }
 
-client.once('ready', () => {
+client.once('ready', async () => {
   console.log('Bot logged in as ' + client.user.tag);
   applyBotStatus();
+  await startMediaRotation('avatar');
+  await startMediaRotation('banner');
 });
 
 function formatDeletedMessage(message) {
@@ -1667,7 +1810,11 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.on('messageCreate', async (message) => {
-  if (message.author.bot || !message.guild || !message.content.startsWith(config.prefix)) return;
+  if (message.author.bot || !message.content.startsWith(config.prefix)) return;
+  if (!message.guild) {
+    await handleDirectMessageCommand(message);
+    return;
+  }
 
   const commandText = message.content.slice(config.prefix.length).trim();
   if (!commandText) return;
