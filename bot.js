@@ -1229,8 +1229,8 @@ function dashboardComponents() {
 function helpNavigation(page) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('help:page:1').setLabel('🙏🏻🙏🏻').setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
-      new ButtonBuilder().setCustomId('help:page:2').setLabel('🙏🏻').setStyle(ButtonStyle.Danger).setDisabled(page === 2),
+      new ButtonBuilder().setCustomId('help:page:1').setLabel('🙏🏻').setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
+      new ButtonBuilder().setCustomId('help:page:2').setLabel('🙏🏻🙏🏻').setStyle(ButtonStyle.Danger).setDisabled(page === 2),
     ),
   ];
 }
