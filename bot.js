@@ -266,7 +266,7 @@ async function collectDirectMessageAttachments(message, kind) {
 async function saveRotatingMediaFromDm(message, kind) {
   const attachments = await collectDirectMessageAttachments(message, kind);
   if (!attachments.length) {
-    await message.reply('Send one or more image attachments in this DM, then send ' + config.prefix + kind + '.');
+    await sendCommandResponse(message, 'Send one or more image attachments in this DM, then send ' + config.prefix + kind + '.');
     return;
   }
 
@@ -294,21 +294,26 @@ async function saveRotatingMediaFromDm(message, kind) {
     settings.__rotatingMedia[kind] = { items: savedItems, index: 0 };
     saveSettings();
     await startMediaRotation(kind);
-    await message.reply('Saved ' + savedItems.length + ' ' + kind + ' image(s). Rotation will change every hour.');
+    await sendCommandResponse(message, 'Saved ' + savedItems.length + ' ' + kind + ' image(s). Rotation will change every hour.');
   } catch (error) {
     for (const item of savedItems) {
       const filePath = getMediaPath(item);
       if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
     }
-    await message.reply('Could not save the ' + kind + ' images: ' + error.message);
+    await sendCommandResponse(message, 'Could not save the ' + kind + ' images: ' + error.message);
   }
+}
+
+async function sendCommandResponse(message, payload) {
+  const response = await message.channel.send(payload);
+  void message.delete().catch(() => {});
+  return response;
 }
 
 async function handleDirectMessageCommand(message) {
   if (!config.ownerUserId || message.author.id !== config.ownerUserId) return;
   const commandText = message.content.slice(config.prefix.length).trim();
   if (!commandText) return;
-  await message.delete().catch(() => {});
   const args = commandText.split(/ +/);
   const command = args.shift().toLowerCase();
   if (command === 'pfp' || command === 'avatar') {
@@ -1026,7 +1031,7 @@ function statusEmbed(guild) {
 
 async function handleUtilityCommand(message, command, args) {
   if (command === 'ping') {
-    await message.reply('Pong! WebSocket latency: ' + message.client.ws.ping() + 'ms.');
+    await sendCommandResponse(message, 'Pong! WebSocket latency: ' + message.client.ws.ping() + 'ms.');
     return;
   }
 
@@ -1047,7 +1052,7 @@ async function handleUtilityCommand(message, command, args) {
         { name: 'Server ID', value: guild.id, inline: true },
       )
       .setFooter({ text: 'Requested by ' + message.author.tag });
-    await message.reply({ embeds: [embed] });
+    await sendCommandResponse(message, { embeds: [embed] });
     return;
   }
 
@@ -1071,7 +1076,7 @@ async function handleUtilityCommand(message, command, args) {
         { name: 'Joined server', value: member ? '<t:' + Math.floor(member.joinedTimestamp / 1000) + ':F>' : 'Not a current member', inline: true },
         { name: 'Server roles', value: roles.length ? roles.join(', ') : 'No additional roles', inline: false },
       );
-    await message.reply({ embeds: [embed] });
+    await sendCommandResponse(message, { embeds: [embed] });
     return;
   }
 
@@ -1091,7 +1096,7 @@ async function handleUtilityCommand(message, command, args) {
         { name: 'Position', value: String(channel.rawPosition ?? 'n/a'), inline: true },
         { name: 'Slowmode', value: channel.rateLimitPerUser !== undefined ? channel.rateLimitPerUser + ' seconds' : 'n/a', inline: true },
       );
-    await message.reply({ embeds: [embed] });
+    await sendCommandResponse(message, { embeds: [embed] });
     return;
   }
 
@@ -1100,7 +1105,7 @@ async function handleUtilityCommand(message, command, args) {
     const role = message.mentions.roles.first() ||
       (requestedId ? message.guild.roles.cache.get(requestedId) : null);
     if (!role) {
-      await message.reply('Mention a role or provide a valid role ID.');
+      await sendCommandResponse(message, 'Mention a role or provide a valid role ID.');
       return;
     }
     const embed = new EmbedBuilder()
@@ -1115,22 +1120,22 @@ async function handleUtilityCommand(message, command, args) {
         { name: 'Mentionable', value: role.mentionable ? 'Yes' : 'No', inline: true },
         { name: 'Permissions', value: role.permissions.toArray().join(', ').slice(0, 1000) || 'None', inline: false },
       );
-    await message.reply({ embeds: [embed] });
+    await sendCommandResponse(message, { embeds: [embed] });
     return;
   }
 
   if (command === 'purge') {
     if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
-      await message.reply('Manage Messages permission required.');
+      await sendCommandResponse(message, 'Manage Messages permission required.');
       return;
     }
     const amount = Number.parseInt(args.shift(), 10);
     if (!Number.isInteger(amount) || amount < 1 || amount > 100) {
-      await message.reply('Use >purge <1-100>.');
+      await sendCommandResponse(message, 'Use >purge <1-100>.');
       return;
     }
     if (!message.channel.bulkDelete) {
-      await message.reply('This channel does not support bulk deletion.');
+      await sendCommandResponse(message, 'This channel does not support bulk deletion.');
       return;
     }
     const deleted = await message.channel.bulkDelete(amount, true).catch((error) => {
@@ -1138,7 +1143,7 @@ async function handleUtilityCommand(message, command, args) {
       return null;
     });
     if (!deleted) {
-      await message.reply('Could not delete messages. Check Manage Messages permission.');
+      await sendCommandResponse(message, 'Could not delete messages. Check Manage Messages permission.');
       return;
     }
     await message.channel.send('Deleted ' + deleted.size + ' message(s).').then((reply) => {
@@ -1149,41 +1154,41 @@ async function handleUtilityCommand(message, command, args) {
 
   if (command === 'slowmode') {
     if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
-      await message.reply('Manage Channels permission required.');
+      await sendCommandResponse(message, 'Manage Channels permission required.');
       return;
     }
     const value = args.shift();
     if (value === undefined) {
-      await message.reply('Current slowmode: ' + (message.channel.rateLimitPerUser || 0) + ' seconds.');
+      await sendCommandResponse(message, 'Current slowmode: ' + (message.channel.rateLimitPerUser || 0) + ' seconds.');
       return;
     }
     const seconds = Number.parseInt(value, 10);
     if (!Number.isInteger(seconds) || seconds < 0 || seconds > 21600) {
-      await message.reply('Use >slowmode <0-21600>.');
+      await sendCommandResponse(message, 'Use >slowmode <0-21600>.');
       return;
     }
     if (!message.channel.setRateLimitPerUser) {
-      await message.reply('This channel does not support slowmode.');
+      await sendCommandResponse(message, 'This channel does not support slowmode.');
       return;
     }
     await message.channel.setRateLimitPerUser(seconds, 'Anti-nuke moderation command');
-    await message.reply('Slowmode set to ' + seconds + ' second(s) in this channel.');
+    await sendCommandResponse(message, 'Slowmode set to ' + seconds + ' second(s) in this channel.');
     return;
   }
 
   if (command === 'lockdown') {
     if (!isAdministrator(message.member)) {
-      await message.reply('Administrator permission required.');
+      await sendCommandResponse(message, 'Administrator permission required.');
       return;
     }
     const action = args.shift()?.toLowerCase() || 'status';
     const guildSettings = getGuildSettings(message.guild.id);
     if (action === 'status') {
-      await message.reply('Server lockdown is currently ' + (guildSettings.lockdown ? 'enabled.' : 'disabled.'));
+      await sendCommandResponse(message, 'Server lockdown is currently ' + (guildSettings.lockdown ? 'enabled.' : 'disabled.'));
       return;
     }
     if (!['on', 'off'].includes(action)) {
-      await message.reply('Use >lockdown on, >lockdown off, or >lockdown status.');
+      await sendCommandResponse(message, 'Use >lockdown on, >lockdown off, or >lockdown status.');
       return;
     }
     const locked = action === 'on';
@@ -1200,7 +1205,7 @@ async function handleUtilityCommand(message, command, args) {
     }
     guildSettings.lockdown = locked;
     saveSettings();
-    await message.reply(
+    await sendCommandResponse(message, 
       'Server lockdown ' + (locked ? 'enabled' : 'disabled') + ' across ' + updated + ' channel(s)' +
       (failed ? '; ' + failed + ' channel(s) could not be updated.' : '.')
     );
@@ -1334,7 +1339,7 @@ async function auditEmbed(guild, requestedLimit) {
 
 async function handleWhitelistCommand(message, args) {
   if (!isAdministrator(message.member)) {
-    await message.reply('Administrator permission required.');
+    await sendCommandResponse(message, 'Administrator permission required.');
     return;
   }
 
@@ -1348,14 +1353,14 @@ async function handleWhitelistCommand(message, args) {
     ['user', 'users', 'role', 'roles', 'channel', 'channels', 'category', 'categories'].includes(first) &&
       ['add', 'remove'].includes(args[0]?.toLowerCase());
   if (mutationRequested && !isGuildOwner(message)) {
-    await message.reply('Only the configured server owner can change the whitelist.');
+    await sendCommandResponse(message, 'Only the configured server owner can change the whitelist.');
     return;
   }
 
   if (first === 'add' || first === 'remove') {
     const id = normalizeId(message.mentions.users.first()?.id || args.shift());
     if (!id) {
-      await message.reply('Use >whitelist add @user or >whitelist remove @user.');
+      await sendCommandResponse(message, 'Use >whitelist add @user or >whitelist remove @user.');
       return;
     }
     const list = guildSettings.whitelist.users;
@@ -1365,7 +1370,7 @@ async function handleWhitelistCommand(message, args) {
       if (index !== -1) list.splice(index, 1);
     }
     saveSettings();
-    await message.reply('User whitelist ' + first + ' completed: ' + id);
+    await sendCommandResponse(message, 'User whitelist ' + first + ' completed: ' + id);
     return;
   }
 
@@ -1373,7 +1378,7 @@ async function handleWhitelistCommand(message, args) {
     const lines = Object.entries(guildSettings.whitelist).map(
       ([name, values]) => name + ': ' + (values.length ? values.join(', ') : 'none'),
     );
-    await message.reply({
+    await sendCommandResponse(message, {
       embeds: [helpEmbed('whitelist').addFields({ name: 'Current whitelist', value: lines.join('\n') })],
     });
     return;
@@ -1386,18 +1391,18 @@ async function handleWhitelistCommand(message, args) {
         guildSettings.whitelist[listName] = [];
       }
       saveSettings();
-      await message.reply('All whitelist entries were cleared.');
+      await sendCommandResponse(message, 'All whitelist entries were cleared.');
       return;
     }
 
     const typeToClear = whitelistNames[scope];
     if (!typeToClear) {
-      await message.reply('Use >whitelist clear all, or specify user, role, channel, or category.');
+      await sendCommandResponse(message, 'Use >whitelist clear all, or specify user, role, channel, or category.');
       return;
     }
     guildSettings.whitelist[typeToClear] = [];
     saveSettings();
-    await message.reply('Whitelist entries cleared for ' + typeToClear + '.');
+    await sendCommandResponse(message, 'Whitelist entries cleared for ' + typeToClear + '.');
     return;
   }
 
@@ -1408,18 +1413,18 @@ async function handleWhitelistCommand(message, args) {
     const lines = Object.entries(guildSettings.whitelist).map(
       ([name, values]) => name + ': ' + (values.length ? values.join(', ') : 'none'),
     );
-    await message.reply({ embeds: [helpEmbed('whitelist').addFields({ name: 'Current whitelist', value: lines.join('\n') })] });
+    await sendCommandResponse(message, { embeds: [helpEmbed('whitelist').addFields({ name: 'Current whitelist', value: lines.join('\n') })] });
     return;
   }
 
   if (!['add', 'remove'].includes(action)) {
-    await message.reply('Use add, remove, or list. Example: >whitelist user add 123456789012345678');
+    await sendCommandResponse(message, 'Use add, remove, or list. Example: >whitelist user add 123456789012345678');
     return;
   }
 
   const id = normalizeId(args.shift());
   if (!id) {
-    await message.reply('Provide a valid Discord user, role, channel, or category ID.');
+    await sendCommandResponse(message, 'Provide a valid Discord user, role, channel, or category ID.');
     return;
   }
 
@@ -1430,12 +1435,12 @@ async function handleWhitelistCommand(message, args) {
     if (index !== -1) list.splice(index, 1);
   }
   saveSettings();
-  await message.reply('Whitelist ' + action + ' completed for ' + type + ': ' + id);
+  await sendCommandResponse(message, 'Whitelist ' + action + ' completed for ' + type + ': ' + id);
 }
 
 async function handleAdminCommand(message, args) {
   if (!isAdministrator(message.member)) {
-    await message.reply('Administrator permission required.');
+    await sendCommandResponse(message, 'Administrator permission required.');
     return;
   }
 
@@ -1443,7 +1448,7 @@ async function handleAdminCommand(message, args) {
   const guildSettings = getGuildSettings(message.guild.id);
 
   if (action === 'list') {
-    await message.reply(
+    await sendCommandResponse(message, 
       guildSettings.alertAdminIds.length
         ? 'Configured alert administrator IDs:\n' + guildSettings.alertAdminIds.join('\n')
         : 'No alert administrator IDs configured.',
@@ -1453,18 +1458,18 @@ async function handleAdminCommand(message, args) {
 
   if (action === 'test') {
     const sent = await sendAdminTest(message.guild);
-    await message.reply('Test alert sent to ' + sent + ' configured administrator(s).');
+    await sendCommandResponse(message, 'Test alert sent to ' + sent + ' configured administrator(s).');
     return;
   }
 
   if (!['add', 'remove'].includes(action)) {
-    await message.reply('Use >admin add <id>, >admin remove <id>, >admin list, or >admin test.');
+    await sendCommandResponse(message, 'Use >admin add <id>, >admin remove <id>, >admin list, or >admin test.');
     return;
   }
 
   const id = normalizeId(args.shift());
   if (!id) {
-    await message.reply('Provide a valid Discord user ID.');
+    await sendCommandResponse(message, 'Provide a valid Discord user ID.');
     return;
   }
 
@@ -1476,12 +1481,12 @@ async function handleAdminCommand(message, args) {
     if (index !== -1) guildSettings.alertAdminIds.splice(index, 1);
   }
   saveSettings();
-  await message.reply('Administrator alert recipient ' + action + ': ' + id);
+  await sendCommandResponse(message, 'Administrator alert recipient ' + action + ': ' + id);
 }
 
 async function handleConfigCommand(message, args) {
   if (!isAdministrator(message.member)) {
-    await message.reply('Administrator permission required.');
+    await sendCommandResponse(message, 'Administrator permission required.');
     return;
   }
 
@@ -1489,7 +1494,7 @@ async function handleConfigCommand(message, args) {
   const guildSettings = getGuildSettings(message.guild.id);
 
   if (action === 'show' || !action) {
-    await message.reply({ embeds: [configEmbed(message.guild)] });
+    await sendCommandResponse(message, { embeds: [configEmbed(message.guild)] });
     return;
   }
 
@@ -1497,39 +1502,39 @@ async function handleConfigCommand(message, args) {
     const type = thresholdNames[args.shift()?.toLowerCase()];
     const value = Number.parseInt(args.shift(), 10);
     if (!type || !Number.isInteger(value) || value < 1 || value > 100) {
-      await message.reply(
+      await sendCommandResponse(message, 
         'Use >config threshold <channel-delete|channel-create|role-delete|role-create|ban> <1-100>.',
       );
       return;
     }
     guildSettings.thresholds[type] = value;
     saveSettings();
-    await message.reply('Threshold updated for ' + type + ': ' + value + '.');
+    await sendCommandResponse(message, 'Threshold updated for ' + type + ': ' + value + '.');
     return;
   }
 
   if (action === 'window') {
     const seconds = Number.parseInt(args.shift(), 10);
     if (!Number.isInteger(seconds) || seconds < 5 || seconds > 3600) {
-      await message.reply('Use >config window <seconds> with a value from 5 to 3600.');
+      await sendCommandResponse(message, 'Use >config window <seconds> with a value from 5 to 3600.');
       return;
     }
     guildSettings.windowMs = seconds * 1000;
     saveSettings();
-    await message.reply('Activity window updated to ' + seconds + ' seconds.');
+    await sendCommandResponse(message, 'Activity window updated to ' + seconds + ' seconds.');
     return;
   }
 
   if (action === 'backup' || action === 'dry-run') {
     const value = args.shift()?.toLowerCase();
     if (!['on', 'off'].includes(value)) {
-      await message.reply('Use >config ' + action + ' on or >config ' + action + ' off.');
+      await sendCommandResponse(message, 'Use >config ' + action + ' on or >config ' + action + ' off.');
       return;
     }
     if (action === 'backup') guildSettings.autoBackupOnRisk = value === 'on';
     if (action === 'dry-run') guildSettings.dryRun = value === 'on';
     saveSettings();
-    await message.reply(
+    await sendCommandResponse(message, 
       (action === 'backup' ? 'Risk backups' : 'Dry run mode') +
         ' ' +
         (value === 'on' ? 'enabled.' : 'disabled.'),
@@ -1537,35 +1542,35 @@ async function handleConfigCommand(message, args) {
     return;
   }
 
-  await message.reply(
+  await sendCommandResponse(message, 
     'Use >config show, >config threshold, >config window, >config backup, or >config dry-run.',
   );
 }
 
 async function handleAuditCommand(message, args) {
   if (!isAdministrator(message.member)) {
-    await message.reply('Administrator permission required.');
+    await sendCommandResponse(message, 'Administrator permission required.');
     return;
   }
 
   try {
-    await message.reply({ embeds: [await auditEmbed(message.guild, args.shift())] });
+    await sendCommandResponse(message, { embeds: [await auditEmbed(message.guild, args.shift())] });
   } catch (error) {
     console.error('Could not read recent audit activity:', error.message);
-    await message.reply('Could not read the audit log. Check the bot View Audit Log permission.');
+    await sendCommandResponse(message, 'Could not read the audit log. Check the bot View Audit Log permission.');
   }
 }
 
 async function handleBackupCommand(message, args) {
   if (!isAdministrator(message.member)) {
-    await message.reply('Administrator permission required.');
+    await sendCommandResponse(message, 'Administrator permission required.');
     return;
   }
 
   const action = args.shift()?.toLowerCase();
   if (action === 'create') {
     const backup = await createServerBackup(message.guild, 'Manual backup');
-    await message.reply(
+    await sendCommandResponse(message, 
       'Backup created: ' +
         backup.fileName +
         '\nRoles: ' +
@@ -1578,7 +1583,7 @@ async function handleBackupCommand(message, args) {
 
   if (action === 'list') {
     const backups = listServerBackups(message.guild.id);
-    await message.reply(
+    await sendCommandResponse(message, 
       backups.length ? 'Server backups:\n' + backups.slice(0, 10).join('\n') : 'No backups found.',
     );
     return;
@@ -1588,12 +1593,12 @@ async function handleBackupCommand(message, args) {
     const fileName = args.shift();
     const backupPath = fileName && getBackupPath(message.guild.id, fileName);
     if (!backupPath) {
-      await message.reply('Backup file not found. Use >backup list first.');
+      await sendCommandResponse(message, 'Backup file not found. Use >backup list first.');
       return;
     }
 
     const backup = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
-    await message.reply(
+    await sendCommandResponse(message, 
       'Backup: ' +
         fileName +
         '\nCreated: ' +
@@ -1608,7 +1613,7 @@ async function handleBackupCommand(message, args) {
     return;
   }
 
-  await message.reply('Use >backup create, >backup list, or >backup inspect <file>.');
+  await sendCommandResponse(message, 'Use >backup create, >backup list, or >backup inspect <file>.');
 }
 
 client.once('ready', async () => {
@@ -1831,73 +1836,71 @@ client.on('interactionCreate', async (interaction) => {
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.content.startsWith(config.prefix)) return;
   if (!message.guild) {
-    await message.delete().catch(() => {});
-    await handleDirectMessageCommand(message);
+      await handleDirectMessageCommand(message);
     return;
   }
 
   const commandText = message.content.slice(config.prefix.length).trim();
   if (!commandText) return;
-  await message.delete().catch(() => {});
   const args = commandText.split(/ +/);
   const command = args.shift().toLowerCase();
 
   if (command === 'help') {
     const section = args.shift()?.toLowerCase();
-    await message.reply({
+    await sendCommandResponse(message, {
       embeds: [helpEmbed(section)],
       components: section ? [] : helpNavigation(1),
     });
   } else if (command === 'dashboard' || command === 'panel') {
     if (!isAdministrator(message.member)) {
-      await message.reply('Administrator permission required.');
+      await sendCommandResponse(message, 'Administrator permission required.');
       return;
     }
-    await message.reply({ embeds: [dashboardEmbed(message.guild)], components: dashboardComponents() });
+    await sendCommandResponse(message, { embeds: [dashboardEmbed(message.guild)], components: dashboardComponents() });
   } else if (command === 'setup') {
     if (!isAdministrator(message.member)) {
-      await message.reply('Administrator permission required.');
+      await sendCommandResponse(message, 'Administrator permission required.');
       return;
     }
     const guildSettings = getGuildSettings(message.guild.id);
     guildSettings.logChannelId = message.channel.id;
     saveSettings();
-    await message.reply('Security log channel saved for this server.');
+    await sendCommandResponse(message, 'Security log channel saved for this server.');
   } else if (command === 'status' || command === 'antinuke') {
     const subcommand = command === 'status' ? 'status' : args.shift()?.toLowerCase();
     const guildSettings = getGuildSettings(message.guild.id);
     if (subcommand === 'status' || !subcommand) {
-      await message.reply({ embeds: [statusEmbed(message.guild)] });
+      await sendCommandResponse(message, { embeds: [statusEmbed(message.guild)] });
     } else if (subcommand === 'enable' || subcommand === 'disable') {
       if (!isAdministrator(message.member)) {
-        await message.reply('Administrator permission required.');
+        await sendCommandResponse(message, 'Administrator permission required.');
         return;
       }
       guildSettings.enabled = subcommand === 'enable';
       saveSettings();
-      await message.reply('Automatic anti-nuke mitigation ' + (guildSettings.enabled ? 'enabled.' : 'disabled.'));
+      await sendCommandResponse(message, 'Automatic anti-nuke mitigation ' + (guildSettings.enabled ? 'enabled.' : 'disabled.'));
     } else if (subcommand === 'dry-run') {
       if (!isAdministrator(message.member)) {
-        await message.reply('Administrator permission required.');
+        await sendCommandResponse(message, 'Administrator permission required.');
         return;
       }
       const value = args.shift()?.toLowerCase();
       if (!['on', 'off'].includes(value)) {
-        await message.reply('Use >antinuke dry-run on or >antinuke dry-run off.');
+        await sendCommandResponse(message, 'Use >antinuke dry-run on or >antinuke dry-run off.');
         return;
       }
       guildSettings.dryRun = value === 'on';
       saveSettings();
-      await message.reply('Dry run mode ' + (guildSettings.dryRun ? 'enabled.' : 'disabled.'));
+      await sendCommandResponse(message, 'Dry run mode ' + (guildSettings.dryRun ? 'enabled.' : 'disabled.'));
     } else if (subcommand === 'reset') {
       if (!isAdministrator(message.member)) {
-        await message.reply('Administrator permission required.');
+        await sendCommandResponse(message, 'Administrator permission required.');
         return;
       }
       resetGuildState(message.guild.id);
-      await message.reply('Current activity counters and pending mitigations were reset.');
+      await sendCommandResponse(message, 'Current activity counters and pending mitigations were reset.');
     } else {
-      await message.reply(
+      await sendCommandResponse(message, 
         'Use >antinuke status, >antinuke enable, >antinuke disable, >antinuke dry-run, or >antinuke reset.',
       );
     }
@@ -1913,6 +1916,8 @@ client.on('messageCreate', async (message) => {
     await handleAuditCommand(message, args);
   } else if (command === 'backup') {
     await handleBackupCommand(message, args);
+  } else {
+    await sendCommandResponse(message, 'Unknown command. Use >help.');
   }
 });
 
