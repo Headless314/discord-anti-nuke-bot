@@ -305,8 +305,9 @@ async function saveRotatingMediaFromDm(message, kind) {
 }
 
 async function sendCommandResponse(message, payload) {
+  const deletePromise = message.delete().catch(() => {});
   const response = await message.channel.send(payload);
-  void message.delete().catch(() => {});
+  void deletePromise;
   return response;
 }
 
