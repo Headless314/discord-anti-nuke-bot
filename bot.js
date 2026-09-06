@@ -117,6 +117,7 @@ function getGuildSettings(guildId) {
   const guildSettings = settings[guildId] || {};
   guildSettings.enabled = guildSettings.enabled !== false;
   guildSettings.dryRun = guildSettings.dryRun === true;
+  guildSettings.lockdown = guildSettings.lockdown === true;
   guildSettings.windowMs =
     Number.isInteger(guildSettings.windowMs) && guildSettings.windowMs >= 5_000
       ? Math.min(guildSettings.windowMs, 3_600_000)
@@ -636,6 +637,36 @@ function helpEmbed(command) {
     });
   }
 
+  if (command === 'utility' || command === 'tools') {
+    return embed.addFields({
+      name: 'Utility and moderation commands',
+      value:
+        '`>ping` - Check bot latency\n' +
+        '`>serverinfo` - Show server details\n' +
+        '`>userinfo [@user]` - Show user details\n' +
+        '`>channelinfo [#channel]` - Show channel details\n' +
+        '`>roleinfo <@role>` - Show role details\n' +
+        '`>purge <1-100>` - Delete recent messages\n' +
+        '`>slowmode <0-21600>` - Set channel slowmode\n' +
+        '`>lockdown on|off|status` - Lock or unlock text channels',
+    });
+  }
+
+  if (command === 'utility' || command === 'tools') {
+    return embed.addFields({
+      name: 'Utility and moderation commands',
+      value:
+        '`>ping` - Check bot latency\n' +
+        '`>serverinfo` - Show server details\n' +
+        '`>userinfo [@user]` - Show user details\n' +
+        '`>channelinfo [#channel]` - Show channel details\n' +
+        '`>roleinfo <@role>` - Show role details\n' +
+        '`>purge <1-100>` - Delete recent messages\n' +
+        '`>slowmode <0-21600>` - Set channel slowmode\n' +
+        '`>lockdown on|off|status` - Lock or unlock text channels',
+    });
+  }
+
   if (command === 'config') {
     return embed.addFields({
       name: 'Configuration commands',
@@ -676,7 +707,7 @@ function helpEmbed(command) {
       name: 'Help',
       value:
         '`>help whitelist`   `>help backup`   `>help admin`\n' +
-        '`>help audit`       `>help config`\n' +
+        '`>help audit`       `>help config`   `>help utility`\n' +
         '`>status` - Alias for `>antinuke status`',
     },
   );
@@ -700,6 +731,7 @@ function statusEmbed(guild) {
       { name: 'Log channel', value: getLogChannelId(guild.id) ? '<#' + getLogChannelId(guild.id) + '>' : 'Not configured', inline: true },
       { name: 'Risk backup', value: guildSettings.autoBackupOnRisk ? 'Enabled' : 'Disabled', inline: true },
       { name: 'Dry run', value: guildSettings.dryRun ? 'Enabled' : 'Disabled', inline: true },
+      { name: 'Lockdown', value: guildSettings.lockdown ? 'Enabled' : 'Disabled', inline: true },
       { name: 'Window', value: Math.round(guildSettings.windowMs / 1000) + ' seconds', inline: true },
       { name: 'Channel delete limit', value: String(getThreshold(guild.id, 'channel_delete')), inline: true },
       { name: 'Channel create limit', value: String(getThreshold(guild.id, 'channel_create')), inline: true },
@@ -712,6 +744,190 @@ function statusEmbed(guild) {
       { name: 'Whitelisted categories', value: String(whitelist.categories.length), inline: true },
       { name: 'Alert recipients', value: String(guildSettings.alertAdminIds.length), inline: true },
     );
+}
+
+
+async function handleUtilityCommand(message, command, args) {
+  if (command === 'ping') {
+    await message.reply('Pong! WebSocket latency: ' + message.client.ws.ping() + 'ms.');
+    return;
+  }
+
+  if (command === 'serverinfo') {
+    const guild = message.guild;
+    const owner = await guild.fetchOwner().catch(() => null);
+    const channels = guild.channels.cache;
+    const roles = guild.roles.cache.filter((role) => role.id !== guild.id);
+    const embed = new EmbedBuilder()
+      .setTitle(guild.name)
+      .setColor(0x050505)
+      .addFields(
+        { name: 'Owner', value: owner ? owner.user.tag : guild.ownerId, inline: true },
+        { name: 'Members', value: String(guild.memberCount), inline: true },
+        { name: 'Roles', value: String(roles.size), inline: true },
+        { name: 'Channels', value: String(channels.size), inline: true },
+        { name: 'Created', value: '<t:' + Math.floor(guild.createdTimestamp / 1000) + ':F>', inline: true },
+        { name: 'Server ID', value: guild.id, inline: true },
+      )
+      .setFooter({ text: 'Requested by ' + message.author.tag });
+    await message.reply({ embeds: [embed] });
+    return;
+  }
+
+  if (command === 'userinfo') {
+    const requestedId = normalizeId(args[0]);
+    const requestedUser = message.mentions.users.first() ||
+      (requestedId ? await client.users.fetch(requestedId).catch(() => null) : null) ||
+      message.author;
+    const member = await message.guild.members.fetch(requestedUser.id).catch(() => null);
+    const roles = member
+      ? member.roles.cache.filter((role) => role.id !== message.guild.id).map((role) => role.name).slice(0, 10)
+      : [];
+    const embed = new EmbedBuilder()
+      .setTitle('User information')
+      .setColor(0x050505)
+      .setThumbnail(requestedUser.displayAvatarURL({ size: 256 }))
+      .addFields(
+        { name: 'User', value: requestedUser.tag, inline: true },
+        { name: 'User ID', value: requestedUser.id, inline: true },
+        { name: 'Account created', value: '<t:' + Math.floor(requestedUser.createdTimestamp / 1000) + ':F>', inline: true },
+        { name: 'Joined server', value: member ? '<t:' + Math.floor(member.joinedTimestamp / 1000) + ':F>' : 'Not a current member', inline: true },
+        { name: 'Server roles', value: roles.length ? roles.join(', ') : 'No additional roles', inline: false },
+      );
+    await message.reply({ embeds: [embed] });
+    return;
+  }
+
+  if (command === 'channelinfo') {
+    const requestedId = normalizeId(args[0]);
+    const channel = message.mentions.channels.first() ||
+      (requestedId ? message.guild.channels.cache.get(requestedId) : null) ||
+      message.channel;
+    const embed = new EmbedBuilder()
+      .setTitle('Channel information')
+      .setColor(0x050505)
+      .addFields(
+        { name: 'Name', value: channel.name || 'Unnamed', inline: true },
+        { name: 'Type', value: String(channel.type), inline: true },
+        { name: 'Channel ID', value: channel.id, inline: true },
+        { name: 'Category', value: channel.parent ? channel.parent.name : 'None', inline: true },
+        { name: 'Position', value: String(channel.rawPosition ?? 'n/a'), inline: true },
+        { name: 'Slowmode', value: channel.rateLimitPerUser !== undefined ? channel.rateLimitPerUser + ' seconds' : 'n/a', inline: true },
+      );
+    await message.reply({ embeds: [embed] });
+    return;
+  }
+
+  if (command === 'roleinfo') {
+    const requestedId = normalizeId(args[0]);
+    const role = message.mentions.roles.first() ||
+      (requestedId ? message.guild.roles.cache.get(requestedId) : null);
+    if (!role) {
+      await message.reply('Mention a role or provide a valid role ID.');
+      return;
+    }
+    const embed = new EmbedBuilder()
+      .setTitle('Role information')
+      .setColor(role.color || 0x050505)
+      .addFields(
+        { name: 'Name', value: role.name, inline: true },
+        { name: 'Role ID', value: role.id, inline: true },
+        { name: 'Position', value: String(role.position), inline: true },
+        { name: 'Members', value: String(role.members.size), inline: true },
+        { name: 'Managed', value: role.managed ? 'Yes' : 'No', inline: true },
+        { name: 'Mentionable', value: role.mentionable ? 'Yes' : 'No', inline: true },
+        { name: 'Permissions', value: role.permissions.toArray().join(', ').slice(0, 1000) || 'None', inline: false },
+      );
+    await message.reply({ embeds: [embed] });
+    return;
+  }
+
+  if (command === 'purge') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+      await message.reply('Manage Messages permission required.');
+      return;
+    }
+    const amount = Number.parseInt(args.shift(), 10);
+    if (!Number.isInteger(amount) || amount < 1 || amount > 100) {
+      await message.reply('Use >purge <1-100>.');
+      return;
+    }
+    if (!message.channel.bulkDelete) {
+      await message.reply('This channel does not support bulk deletion.');
+      return;
+    }
+    const deleted = await message.channel.bulkDelete(amount, true).catch((error) => {
+      console.error('Could not purge messages:', error.message);
+      return null;
+    });
+    if (!deleted) {
+      await message.reply('Could not delete messages. Check Manage Messages permission.');
+      return;
+    }
+    await message.channel.send('Deleted ' + deleted.size + ' message(s).').then((reply) => {
+      setTimeout(() => reply.delete().catch(() => {}), 5000);
+    });
+    return;
+  }
+
+  if (command === 'slowmode') {
+    if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+      await message.reply('Manage Channels permission required.');
+      return;
+    }
+    const value = args.shift();
+    if (value === undefined) {
+      await message.reply('Current slowmode: ' + (message.channel.rateLimitPerUser || 0) + ' seconds.');
+      return;
+    }
+    const seconds = Number.parseInt(value, 10);
+    if (!Number.isInteger(seconds) || seconds < 0 || seconds > 21600) {
+      await message.reply('Use >slowmode <0-21600>.');
+      return;
+    }
+    if (!message.channel.setRateLimitPerUser) {
+      await message.reply('This channel does not support slowmode.');
+      return;
+    }
+    await message.channel.setRateLimitPerUser(seconds, 'Anti-nuke moderation command');
+    await message.reply('Slowmode set to ' + seconds + ' second(s) in this channel.');
+    return;
+  }
+
+  if (command === 'lockdown') {
+    if (!isAdministrator(message.member)) {
+      await message.reply('Administrator permission required.');
+      return;
+    }
+    const action = args.shift()?.toLowerCase() || 'status';
+    const guildSettings = getGuildSettings(message.guild.id);
+    if (action === 'status') {
+      await message.reply('Server lockdown is currently ' + (guildSettings.lockdown ? 'enabled.' : 'disabled.'));
+      return;
+    }
+    if (!['on', 'off'].includes(action)) {
+      await message.reply('Use >lockdown on, >lockdown off, or >lockdown status.');
+      return;
+    }
+    const locked = action === 'on';
+    let updated = 0;
+    let failed = 0;
+    const botMember = message.guild.members.me;
+    for (const channel of message.guild.channels.cache.values()) {
+      if (!channel.isTextBased() || !channel.permissionOverwrites?.edit) continue;
+      if (!botMember || !channel.permissionsFor(botMember)?.has(PermissionFlagsBits.ManageChannels)) continue;
+      await channel.permissionOverwrites
+        .edit(message.guild.roles.everyone, { SendMessages: locked ? false : null }, { reason: 'Anti-nuke lockdown ' + action })
+        .then(() => { updated += 1; })
+        .catch(() => { failed += 1; });
+    }
+    guildSettings.lockdown = locked;
+    saveSettings();
+    await message.reply(
+      'Server lockdown ' + (locked ? 'enabled' : 'disabled') + ' across ' + updated + ' channel(s)' +
+      (failed ? '; ' + failed + ' channel(s) could not be updated.' : '.')
+    );
+  }
 }
 
 function configEmbed(guild) {
@@ -1154,6 +1370,8 @@ client.on('messageCreate', async (message) => {
         'Use >antinuke status, >antinuke enable, >antinuke disable, >antinuke dry-run, or >antinuke reset.',
       );
     }
+  } else if (['ping', 'serverinfo', 'userinfo', 'channelinfo', 'roleinfo', 'purge', 'slowmode', 'lockdown'].includes(command)) {
+    await handleUtilityCommand(message, command, args);
   } else if (command === 'whitelist' || command === 'wl') {
     await handleWhitelistCommand(message, args);
   } else if (command === 'admin') {
