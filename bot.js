@@ -1,17 +1,33 @@
 const {
+  ActivityType,
+  ActionRowBuilder,
   AuditLogEvent,
+  ButtonBuilder,
+  ButtonStyle,
   ChannelType,
   Client,
   Collection,
   EmbedBuilder,
   GatewayIntentBits,
+  ModalBuilder,
   PermissionFlagsBits,
+  TextInputBuilder,
+  TextInputStyle,
 } = require('discord.js');
 const dotenv = require('dotenv');
 const fs = require('node:fs');
 const path = require('node:path');
 
 dotenv.config();
+
+const EMBED_RED = 0xed1c24;
+const BOT_STATUS_TYPES = Object.freeze({
+  playing: ActivityType.Playing,
+  streaming: ActivityType.Streaming,
+  listening: ActivityType.Listening,
+  watching: ActivityType.Watching,
+  competing: ActivityType.Competing,
+});
 
 const client = new Client({
   intents: [
@@ -45,6 +61,7 @@ const config = {
     channel_create: numberFromEnv('CHANNEL_CREATE_THRESHOLD', 5),
     role_delete: numberFromEnv('ROLE_DELETE_THRESHOLD', 5),
     role_create: numberFromEnv('ROLE_CREATE_THRESHOLD', 5),
+    kick: numberFromEnv('KICK_THRESHOLD', 10),
     ban: numberFromEnv('BAN_THRESHOLD', 10),
   },
   trustedUserIds: new Set(
@@ -82,6 +99,10 @@ const thresholdNames = {
   'role-delete': 'role_delete',
   role_create: 'role_create',
   'role-create': 'role_create',
+  kick: 'kick',
+  kicks: 'kick',
+  'mass-create': 'channel_create',
+  mass_create: 'channel_create',
   ban: 'ban',
   bans: 'ban',
 };
@@ -114,6 +135,19 @@ function loadSettings() {
 }
 
 const settings = loadSettings();
+
+function getBotStatusSettings() {
+  const saved = settings.__botStatus && typeof settings.__botStatus === 'object' ? settings.__botStatus : {};
+  const type = Object.prototype.hasOwnProperty.call(BOT_STATUS_TYPES, saved.type) ? saved.type : 'watching';
+  const text = typeof saved.text === 'string' && saved.text.trim() ? saved.text.trim().slice(0, 128) : 'security monitoring';
+  return { type, text };
+}
+
+function applyBotStatus() {
+  if (!client.user) return;
+  const status = getBotStatusSettings();
+  client.user.setActivity(status.text, { type: BOT_STATUS_TYPES[status.type] });
+}
 
 function getGuildSettings(guildId) {
   const guildSettings = settings[guildId] || {};
@@ -600,11 +634,13 @@ async function recordActivity({
   details,
   reason,
   color = 0xff6600,
+  ignoreUnknown = false,
 }) {
   if (!getGuildSettings(guild.id).enabled) return;
 
   const executor = await findExecutor(guild, auditAction, target.id);
   if (!executor) {
+    if (ignoreUnknown) return;
     await logAction(
       guild,
       title,
@@ -657,22 +693,23 @@ async function recordActivity({
   await notifyAdmins(guild, reason, executor.id, backup && backup.fileName);
 }
 
-function helpEmbed(command) {
+function helpEmbed(command, page = 1) {
+  const commandText = (value) => String.fromCharCode(96) + value + String.fromCharCode(96);
   const embed = new EmbedBuilder()
     .setTitle('Anti-Nuke Command Center')
-    .setColor(0x0b0f14);
+    .setColor(EMBED_RED);
 
   if (command === 'whitelist' || command === 'wl') {
     return embed.addFields({
       name: '🔐 Whitelist Commands',
       value:
-        '`>whitelist add @user` - Owner-only shorthand\n' +
-        '`>whitelist user add <id>`\n' +
-        '`>whitelist user remove <id>`\n' +
-        '`>whitelist channel add <id>`\n' +
-        '`>whitelist category add <id>`\n' +
-        '`>whitelist role add <id>`\n' +
-        '`>whitelist list`',
+        commandText('>whitelist add @user') + ' - Owner-only shorthand\n' +
+        commandText('>whitelist user add <id>') + '\n' +
+        commandText('>whitelist user remove <id>') + '\n' +
+        commandText('>whitelist channel add <id>') + '\n' +
+        commandText('>whitelist category add <id>') + '\n' +
+        commandText('>whitelist role add <id>') + '\n' +
+        commandText('>whitelist list'),
     });
   }
 
@@ -680,9 +717,9 @@ function helpEmbed(command) {
     return embed.addFields({
       name: '💾 Backup Commands',
       value:
-        '`>backup create` - Save server structure\n' +
-        '`>backup list` - List this server backups\n' +
-        '`>backup inspect <file>` - Inspect one backup',
+        commandText('>backup create') + ' - Save server structure\n' +
+        commandText('>backup list') + ' - List this server backups\n' +
+        commandText('>backup inspect <file>') + ' - Inspect one backup',
     });
   }
 
@@ -690,10 +727,10 @@ function helpEmbed(command) {
     return embed.addFields({
       name: '📣 Administrator Alerts',
       value:
-        '`>admin add <id>` - Add an administrator alert recipient\n' +
-        '`>admin remove <id>` - Remove a recipient\n' +
-        '`>admin list` - List configured recipients\n' +
-        '`>admin test` - Send a test alert',
+        commandText('>admin add <id>') + ' - Add an administrator alert recipient\n' +
+        commandText('>admin remove <id>') + ' - Remove a recipient\n' +
+        commandText('>admin list') + ' - List configured recipients\n' +
+        commandText('>admin test') + ' - Send a test alert',
     });
   }
 
@@ -701,8 +738,8 @@ function helpEmbed(command) {
     return embed.addFields({
       name: '📋 Audit Commands',
       value:
-        '`>audit recent` - Show recent server audit entries\n' +
-        '`>audit recent 15` - Show up to 15 entries',
+        commandText('>audit recent') + ' - Show recent server audit entries\n' +
+        commandText('>audit recent 15') + ' - Show up to 15 entries',
     });
   }
 
@@ -710,14 +747,14 @@ function helpEmbed(command) {
     return embed.addFields({
       name: '🛠️ Utility and Moderation Commands',
       value:
-        '`>ping` - Check bot latency\n' +
-        '`>serverinfo` - Show server details\n' +
-        '`>userinfo [@user]` - Show user details\n' +
-        '`>channelinfo [#channel]` - Show channel details\n' +
-        '`>roleinfo <@role>` - Show role details\n' +
-        '`>purge <1-100>` - Delete recent messages\n' +
-        '`>slowmode <0-21600>` - Set channel slowmode\n' +
-        '`>lockdown on|off|status` - Lock or unlock text channels',
+        commandText('>ping') + ' - Check bot latency\n' +
+        commandText('>serverinfo') + ' - Show server details\n' +
+        commandText('>userinfo [@user]') + ' - Show user details\n' +
+        commandText('>channelinfo [#channel]') + ' - Show channel details\n' +
+        commandText('>roleinfo <@role>') + ' - Show role details\n' +
+        commandText('>purge <1-100>') + ' - Delete recent messages\n' +
+        commandText('>slowmode <0-21600>') + ' - Set channel slowmode\n' +
+        commandText('>lockdown on|off|status') + ' - Lock or unlock text channels',
     });
   }
 
@@ -725,44 +762,72 @@ function helpEmbed(command) {
     return embed.addFields({
       name: '⚙️ Configuration Commands',
       value:
-        '`>config show` - Show server overrides\n' +
-        '`>config threshold <type> <number>`\n' +
-        '`>config window <seconds>`\n' +
-        '`>config backup on|off`\n' +
-        '`>config dry-run on|off`',
+        commandText('>config show') + ' - Show server overrides\n' +
+        commandText('>config threshold <type> <number>') + '\n' +
+        commandText('>config window <seconds>') + '\n' +
+        commandText('>config backup on|off') + '\n' +
+        commandText('>config dry-run on|off'),
     });
+  }
+
+  const pageNumber = page === 2 ? 2 : 1;
+  embed.setFooter({ text: 'Page ' + pageNumber + ' of 2 • Use the buttons to navigate' });
+
+  if (pageNumber === 1) {
+    return embed.addFields(
+      {
+        name: '🛡️ Protection',
+        value:
+          commandText('>antinuke status') + ' - Show protection status\n' +
+          commandText('>antinuke enable') + ' - Enable automatic mitigation\n' +
+          commandText('>antinuke disable') + ' - Disable automatic mitigation\n' +
+          commandText('>antinuke dry-run on|off') + ' - Preview mitigation\n' +
+          commandText('>antinuke reset') + ' - Clear activity counters\n' +
+          commandText('>setup') + ' - Save this channel for security logs',
+      },
+      {
+        name: '📊 Dashboard',
+        value:
+          commandText('>dashboard') + ' - Open the interactive control panel\n' +
+          commandText('>status') + ' - Alias for ' + commandText('>antinuke status'),
+      },
+      {
+        name: '🔐 Access Control',
+        value:
+          commandText('>whitelist ...') + ' - Manage trusted users, roles, channels, and categories\n' +
+          commandText('>admin ...') + ' - Manage risk alert recipients',
+      },
+    );
   }
 
   return embed.addFields(
     {
-      name: '🛡️ Protection',
-      value:
-        '`>antinuke status` - Show protection status\n' +
-        '`>antinuke enable` - Enable automatic mitigation\n' +
-        '`>antinuke disable` - Disable automatic mitigation\n' +
-        '`>antinuke dry-run on|off` - Preview mitigation without role changes\n' +
-        '`>antinuke reset` - Clear current activity counters\n' +
-        '`>setup` - Save this channel for security logs',
-    },
-    {
-      name: '🔐 Access Control',
-      value:
-        '`>whitelist ...` - Manage users, roles, channels, and categories\n' +
-        '`>admin ...` - Manage risk alert recipients',
-    },
-    {
       name: '💾 Backups',
       value:
-        '`>backup create` - Snapshot roles, channels, categories, and overwrites\n' +
-        '`>backup list` - List saved snapshots\n' +
-        '`>backup inspect <file>` - Inspect a snapshot',
+        commandText('>backup create') + ' - Snapshot roles, channels, categories, and overwrites\n' +
+        commandText('>backup list') + ' - List saved snapshots\n' +
+        commandText('>backup inspect <file>') + ' - Inspect a snapshot',
     },
     {
-      name: '📚 Help and Status',
+      name: '🛠️ Utilities',
       value:
-        '`>help whitelist`   `>help backup`   `>help admin`\n' +
-        '`>help audit`       `>help config`   `>help utility`\n' +
-        '`>status` - Alias for `>antinuke status`',
+        commandText('>ping') + '  ' + commandText('>serverinfo') + '  ' + commandText('>userinfo') + '  ' + commandText('>channelinfo') + '\n' +
+        commandText('>roleinfo') + '  ' + commandText('>purge') + '  ' + commandText('>slowmode') + '  ' + commandText('>lockdown'),
+    },
+    {
+      name: '⚙️ Configuration',
+      value:
+        commandText('>config show') + ' - Show server overrides\n' +
+        commandText('>config threshold <type> <number>') + '\n' +
+        commandText('>config window <seconds>') + '\n' +
+        commandText('>config backup on|off') + '\n' +
+        commandText('>config dry-run on|off'),
+    },
+    {
+      name: '📚 Detailed Help',
+      value:
+        commandText('>help whitelist') + '  ' + commandText('>help backup') + '  ' + commandText('>help admin') + '\n' +
+        commandText('>help audit') + '  ' + commandText('>help config') + '  ' + commandText('>help utility'),
     },
   );
 }
@@ -771,15 +836,8 @@ function statusEmbed(guild) {
   const guildSettings = getGuildSettings(guild.id);
   const whitelist = guildSettings.whitelist;
   return new EmbedBuilder()
-    .setTitle('Anti-nuke status')
-    .setColor(guildSettings.enabled ? 0x050505 : 0x555555)
-    .setDescription(
-      '```text\n' +
-        '+--------------------------------------+\n' +
-        '|           SECURITY STATUS            |\n' +
-        '+--------------------------------------+\n' +
-        '```',
-    )
+    .setTitle('Anti-Nuke Status')
+    .setColor(EMBED_RED)
     .addFields(
       { name: 'Automatic mitigation', value: guildSettings.enabled ? 'Enabled' : 'Disabled', inline: true },
       { name: 'Log channel', value: getLogChannelId(guild.id) ? '<#' + getLogChannelId(guild.id) + '>' : 'Not configured', inline: true },
@@ -791,6 +849,7 @@ function statusEmbed(guild) {
       { name: 'Channel create limit', value: String(getThreshold(guild.id, 'channel_create')), inline: true },
       { name: 'Role delete limit', value: String(getThreshold(guild.id, 'role_delete')), inline: true },
       { name: 'Role create limit', value: String(getThreshold(guild.id, 'role_create')), inline: true },
+      { name: 'Kick limit', value: String(getThreshold(guild.id, 'kick')), inline: true },
       { name: 'Ban limit', value: String(getThreshold(guild.id, 'ban')), inline: true },
       { name: 'Whitelisted users', value: String(whitelist.users.length), inline: true },
       { name: 'Whitelisted roles', value: String(whitelist.roles.length), inline: true },
@@ -799,7 +858,6 @@ function statusEmbed(guild) {
       { name: 'Alert recipients', value: String(guildSettings.alertAdminIds.length), inline: true },
     );
 }
-
 
 async function handleUtilityCommand(message, command, args) {
   if (command === 'ping') {
@@ -814,7 +872,7 @@ async function handleUtilityCommand(message, command, args) {
     const roles = guild.roles.cache.filter((role) => role.id !== guild.id);
     const embed = new EmbedBuilder()
       .setTitle(guild.name)
-      .setColor(0x050505)
+      .setColor(EMBED_RED)
       .addFields(
         { name: 'Owner', value: owner ? owner.user.tag : guild.ownerId, inline: true },
         { name: 'Members', value: String(guild.memberCount), inline: true },
@@ -839,7 +897,7 @@ async function handleUtilityCommand(message, command, args) {
       : [];
     const embed = new EmbedBuilder()
       .setTitle('User information')
-      .setColor(0x050505)
+      .setColor(EMBED_RED)
       .setThumbnail(requestedUser.displayAvatarURL({ size: 256 }))
       .addFields(
         { name: 'User', value: requestedUser.tag, inline: true },
@@ -859,7 +917,7 @@ async function handleUtilityCommand(message, command, args) {
       message.channel;
     const embed = new EmbedBuilder()
       .setTitle('Channel information')
-      .setColor(0x050505)
+      .setColor(EMBED_RED)
       .addFields(
         { name: 'Name', value: channel.name || 'Unnamed', inline: true },
         { name: 'Type', value: String(channel.type), inline: true },
@@ -882,7 +940,7 @@ async function handleUtilityCommand(message, command, args) {
     }
     const embed = new EmbedBuilder()
       .setTitle('Role information')
-      .setColor(role.color || 0x050505)
+      .setColor(EMBED_RED)
       .addFields(
         { name: 'Name', value: role.name, inline: true },
         { name: 'Role ID', value: role.id, inline: true },
@@ -987,24 +1045,97 @@ async function handleUtilityCommand(message, command, args) {
 function configEmbed(guild) {
   const guildSettings = getGuildSettings(guild.id);
   return new EmbedBuilder()
-    .setTitle('Anti-nuke configuration')
-    .setColor(0x050505)
-    .setDescription(
-      '```text\n' +
-        '+--------------------------------------+\n' +
-        '|          SERVER OVERRIDES            |\n' +
-        '+--------------------------------------+\n' +
-        '```',
-    )
+    .setTitle('Anti-Nuke Configuration')
+    .setColor(EMBED_RED)
     .addFields(
-      { name: 'Window', value: Math.round(guildSettings.windowMs / 1000) + ' seconds', inline: true },
+      { name: 'Activity window', value: Math.round(guildSettings.windowMs / 1000) + ' seconds', inline: true },
       { name: 'Backup on risk', value: guildSettings.autoBackupOnRisk ? 'Enabled' : 'Disabled', inline: true },
       { name: 'Dry run', value: guildSettings.dryRun ? 'Enabled' : 'Disabled', inline: true },
       { name: 'Channel delete', value: String(getThreshold(guild.id, 'channel_delete')), inline: true },
       { name: 'Channel create', value: String(getThreshold(guild.id, 'channel_create')), inline: true },
       { name: 'Role delete', value: String(getThreshold(guild.id, 'role_delete')), inline: true },
       { name: 'Role create', value: String(getThreshold(guild.id, 'role_create')), inline: true },
+      { name: 'Kick', value: String(getThreshold(guild.id, 'kick')), inline: true },
       { name: 'Ban', value: String(getThreshold(guild.id, 'ban')), inline: true },
+    );
+}
+
+function dashboardEmbed(guild) {
+  const guildSettings = getGuildSettings(guild.id);
+  const botStatus = getBotStatusSettings();
+  return new EmbedBuilder()
+    .setTitle('Anti-Nuke Dashboard')
+    .setColor(EMBED_RED)
+    .addFields(
+      { name: 'Protection', value: guildSettings.enabled ? 'Enabled' : 'Disabled', inline: true },
+      { name: 'Dry run', value: guildSettings.dryRun ? 'Enabled' : 'Disabled', inline: true },
+      { name: 'Activity window', value: Math.round(guildSettings.windowMs / 1000) + ' seconds', inline: true },
+      { name: 'Channel create / mass create', value: String(getThreshold(guild.id, 'channel_create')), inline: true },
+      { name: 'Channel delete', value: String(getThreshold(guild.id, 'channel_delete')), inline: true },
+      { name: 'Role create / mass create', value: String(getThreshold(guild.id, 'role_create')), inline: true },
+      { name: 'Role delete', value: String(getThreshold(guild.id, 'role_delete')), inline: true },
+      { name: 'Kick', value: String(getThreshold(guild.id, 'kick')), inline: true },
+      { name: 'Ban', value: String(getThreshold(guild.id, 'ban')), inline: true },
+      { name: 'Bot status', value: botStatus.type + ': ' + botStatus.text, inline: false },
+    );
+}
+
+function dashboardComponents() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('dashboard:threshold').setLabel('Set Threshold').setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId('dashboard:window').setLabel('Set Time Window').setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId('dashboard:status').setLabel('Bot Status').setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId('dashboard:toggle').setLabel('Enable / Disable').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('dashboard:refresh').setLabel('Refresh').setStyle(ButtonStyle.Secondary),
+    ),
+  ];
+}
+
+function helpNavigation(page) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('help:page:1').setLabel('⬅️').setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
+      new ButtonBuilder().setCustomId('help:page:2').setLabel('🙏🏻').setStyle(ButtonStyle.Danger).setDisabled(page === 2),
+    ),
+  ];
+}
+
+function textInputRow(customId, label, placeholder) {
+  return new ActionRowBuilder().addComponents(
+    new TextInputBuilder()
+      .setCustomId(customId)
+      .setLabel(label)
+      .setPlaceholder(placeholder)
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true),
+  );
+}
+
+function thresholdModal() {
+  return new ModalBuilder()
+    .setCustomId('dashboard:threshold:modal')
+    .setTitle('Configure protection threshold')
+    .addComponents(
+      textInputRow('event', 'Event type', 'ban, kick, channel-create, role-create, mass-create'),
+      textInputRow('value', 'Actions allowed in the window', '1 to 100'),
+    );
+}
+
+function windowModal() {
+  return new ModalBuilder()
+    .setCustomId('dashboard:window:modal')
+    .setTitle('Configure activity window')
+    .addComponents(textInputRow('seconds', 'Window in seconds', '5 to 3600'));
+}
+
+function statusModal() {
+  return new ModalBuilder()
+    .setCustomId('dashboard:status:modal')
+    .setTitle('Change bot status')
+    .addComponents(
+      textInputRow('type', 'Status type', 'playing, watching, listening, competing'),
+      textInputRow('text', 'Status text', 'security monitoring'),
     );
 }
 
@@ -1025,7 +1156,7 @@ async function auditEmbed(guild, requestedLimit) {
 
   return new EmbedBuilder()
     .setTitle('Recent audit activity')
-    .setColor(0x050505)
+    .setColor(EMBED_RED)
     .setDescription(
       lines.length
         ? lines.join('\n').slice(0, 3900)
@@ -1315,7 +1446,7 @@ async function handleBackupCommand(message, args) {
 
 client.once('ready', () => {
   console.log('Bot logged in as ' + client.user.tag);
-  client.user.setActivity('security monitoring', { type: 'WATCHING' });
+  applyBotStatus();
 });
 
 function formatDeletedMessage(message) {
@@ -1425,6 +1556,116 @@ client.on('guildBanAdd', async (ban) => {
   });
 });
 
+client.on('guildMemberRemove', async (member) => {
+  if (!member.guild || !member.user) return;
+  await recordActivity({
+    guild: member.guild,
+    target: member.user,
+    auditAction: AuditLogEvent.MemberKick,
+    type: 'kick',
+    title: 'Member kicked',
+    details: 'Member: <@' + member.user.id + '>',
+    reason: 'mass kicks',
+    ignoreUnknown: true,
+  });
+});
+
+client.on('interactionCreate', async (interaction) => {
+  try {
+    if (!interaction.inGuild()) return;
+
+    if (interaction.isButton()) {
+      if (interaction.customId.startsWith('help:page:')) {
+        const page = interaction.customId.endsWith(':2') ? 2 : 1;
+        await interaction.update({ embeds: [helpEmbed(null, page)], components: helpNavigation(page) });
+        return;
+      }
+
+      if (!interaction.customId.startsWith('dashboard:')) return;
+      if (!isAdministrator(interaction.member)) {
+        await interaction.reply({ content: 'Administrator permission required.', ephemeral: true });
+        return;
+      }
+
+      if (interaction.customId === 'dashboard:threshold') {
+        await interaction.showModal(thresholdModal());
+        return;
+      }
+      if (interaction.customId === 'dashboard:window') {
+        await interaction.showModal(windowModal());
+        return;
+      }
+      if (interaction.customId === 'dashboard:status') {
+        await interaction.showModal(statusModal());
+        return;
+      }
+      if (interaction.customId === 'dashboard:toggle') {
+        const guildSettings = getGuildSettings(interaction.guild.id);
+        guildSettings.enabled = !guildSettings.enabled;
+        saveSettings();
+        await interaction.update({ embeds: [dashboardEmbed(interaction.guild)], components: dashboardComponents() });
+        return;
+      }
+      if (interaction.customId === 'dashboard:refresh') {
+        await interaction.update({ embeds: [dashboardEmbed(interaction.guild)], components: dashboardComponents() });
+      }
+      return;
+    }
+
+    if (!interaction.isModalSubmit()) return;
+    if (!interaction.customId.startsWith('dashboard:')) return;
+    if (!isAdministrator(interaction.member)) {
+      await interaction.reply({ content: 'Administrator permission required.', ephemeral: true });
+      return;
+    }
+
+    if (interaction.customId === 'dashboard:threshold:modal') {
+      const rawType = interaction.fields.getTextInputValue('event').trim().toLowerCase();
+      const type = thresholdNames[rawType];
+      const value = Number.parseInt(interaction.fields.getTextInputValue('value').trim(), 10);
+      if (!type || !Number.isInteger(value) || value < 1 || value > 100) {
+        await interaction.reply({ content: 'Invalid threshold. Use ban, kick, channel-create, channel-delete, role-create, role-delete, or mass-create with a value from 1 to 100.', ephemeral: true });
+        return;
+      }
+      const guildSettings = getGuildSettings(interaction.guild.id);
+      guildSettings.thresholds[type] = value;
+      saveSettings();
+      await interaction.reply({ content: 'Updated ' + type.replace(/_/g, ' ') + ' threshold to ' + value + '.', ephemeral: true });
+      return;
+    }
+
+    if (interaction.customId === 'dashboard:window:modal') {
+      const seconds = Number.parseInt(interaction.fields.getTextInputValue('seconds').trim(), 10);
+      if (!Number.isInteger(seconds) || seconds < 5 || seconds > 3600) {
+        await interaction.reply({ content: 'The activity window must be a whole number from 5 to 3600 seconds.', ephemeral: true });
+        return;
+      }
+      const guildSettings = getGuildSettings(interaction.guild.id);
+      guildSettings.windowMs = seconds * 1000;
+      saveSettings();
+      await interaction.reply({ content: 'Activity window updated to ' + seconds + ' seconds.', ephemeral: true });
+      return;
+    }
+
+    if (interaction.customId === 'dashboard:status:modal') {
+      const type = interaction.fields.getTextInputValue('type').trim().toLowerCase();
+      const text = interaction.fields.getTextInputValue('text').trim().slice(0, 128);
+      if (!Object.prototype.hasOwnProperty.call(BOT_STATUS_TYPES, type) || !text) {
+        await interaction.reply({ content: 'Use a valid status type: playing, streaming, listening, watching, or competing.', ephemeral: true });
+        return;
+      }
+      settings.__botStatus = { type, text };
+      saveSettings();
+      applyBotStatus();
+      await interaction.reply({ content: 'Bot status updated to ' + type + ': ' + text, ephemeral: true });
+    }
+  } catch (error) {
+    console.error('Interaction handling error:', error.message);
+    if (interaction.deferred || interaction.replied) return;
+    await interaction.reply({ content: 'The dashboard action could not be completed.', ephemeral: true }).catch(() => {});
+  }
+});
+
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.guild || !message.content.startsWith(config.prefix)) return;
 
@@ -1434,7 +1675,17 @@ client.on('messageCreate', async (message) => {
   const command = args.shift().toLowerCase();
 
   if (command === 'help') {
-    await message.reply({ embeds: [helpEmbed(args.shift()?.toLowerCase())] });
+    const section = args.shift()?.toLowerCase();
+    await message.reply({
+      embeds: [helpEmbed(section)],
+      components: section ? [] : helpNavigation(1),
+    });
+  } else if (command === 'dashboard' || command === 'panel') {
+    if (!isAdministrator(message.member)) {
+      await message.reply('Administrator permission required.');
+      return;
+    }
+    await message.reply({ embeds: [dashboardEmbed(message.guild)], components: dashboardComponents() });
   } else if (command === 'setup') {
     if (!isAdministrator(message.member)) {
       await message.reply('Administrator permission required.');
