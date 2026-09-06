@@ -1,5 +1,4 @@
 const {
-  ActivityType,
   ActionRowBuilder,
   AuditLogEvent,
   ButtonBuilder,
@@ -11,6 +10,7 @@ const {
   GatewayIntentBits,
   ModalBuilder,
   PermissionFlagsBits,
+  StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
 } = require('discord.js');
@@ -20,14 +20,7 @@ const path = require('node:path');
 
 dotenv.config();
 
-const EMBED_RED = 0xed1c24;
-const BOT_STATUS_TYPES = Object.freeze({
-  playing: ActivityType.Playing,
-  streaming: ActivityType.Streaming,
-  listening: ActivityType.Listening,
-  watching: ActivityType.Watching,
-  competing: ActivityType.Competing,
-});
+const EMBED_BLACK = 0x000000;
 
 const client = new Client({
   intents: [
@@ -135,19 +128,6 @@ function loadSettings() {
 }
 
 const settings = loadSettings();
-
-function getBotStatusSettings() {
-  const saved = settings.__botStatus && typeof settings.__botStatus === 'object' ? settings.__botStatus : {};
-  const type = Object.prototype.hasOwnProperty.call(BOT_STATUS_TYPES, saved.type) ? saved.type : 'watching';
-  const text = typeof saved.text === 'string' && saved.text.trim() ? saved.text.trim().slice(0, 128) : 'security monitoring';
-  return { type, text };
-}
-
-function applyBotStatus() {
-  if (!client.user) return;
-  const status = getBotStatusSettings();
-  client.user.setActivity(status.text, { type: BOT_STATUS_TYPES[status.type] });
-}
 
 
 const mediaRotationTimers = { avatar: null, banner: null };
@@ -838,7 +818,7 @@ function helpEmbed(command, page = 1) {
   const commandText = (value) => String.fromCharCode(96) + value + String.fromCharCode(96);
   const embed = new EmbedBuilder()
     .setTitle('Anti-Nuke Command Center')
-    .setColor(EMBED_RED);
+    .setColor(EMBED_BLACK);
 
   if (command === 'whitelist' || command === 'wl') {
     return embed.addFields({
@@ -912,7 +892,7 @@ function helpEmbed(command, page = 1) {
   }
 
   const pageNumber = page === 2 ? 2 : 1;
-  embed.setFooter({ text: 'Page ' + pageNumber + ' of 2 • Use the buttons to navigate' });
+  embed.setFooter({ text: 'Page ' + pageNumber + ' of 2 - Use the buttons to navigate' });
 
   if (pageNumber === 1) {
     return embed.addFields(
@@ -978,7 +958,7 @@ function statusEmbed(guild) {
   const whitelist = guildSettings.whitelist;
   return new EmbedBuilder()
     .setTitle('Anti-Nuke Status')
-    .setColor(EMBED_RED)
+    .setColor(EMBED_BLACK)
     .addFields(
       { name: 'Automatic mitigation', value: guildSettings.enabled ? 'Enabled' : 'Disabled', inline: true },
       { name: 'Log channel', value: getLogChannelId(guild.id) ? '<#' + getLogChannelId(guild.id) + '>' : 'Not configured', inline: true },
@@ -1013,7 +993,7 @@ async function handleUtilityCommand(message, command, args) {
     const roles = guild.roles.cache.filter((role) => role.id !== guild.id);
     const embed = new EmbedBuilder()
       .setTitle(guild.name)
-      .setColor(EMBED_RED)
+      .setColor(EMBED_BLACK)
       .addFields(
         { name: 'Owner', value: owner ? owner.user.tag : guild.ownerId, inline: true },
         { name: 'Members', value: String(guild.memberCount), inline: true },
@@ -1038,7 +1018,7 @@ async function handleUtilityCommand(message, command, args) {
       : [];
     const embed = new EmbedBuilder()
       .setTitle('User information')
-      .setColor(EMBED_RED)
+      .setColor(EMBED_BLACK)
       .setThumbnail(requestedUser.displayAvatarURL({ size: 256 }))
       .addFields(
         { name: 'User', value: requestedUser.tag, inline: true },
@@ -1058,7 +1038,7 @@ async function handleUtilityCommand(message, command, args) {
       message.channel;
     const embed = new EmbedBuilder()
       .setTitle('Channel information')
-      .setColor(EMBED_RED)
+      .setColor(EMBED_BLACK)
       .addFields(
         { name: 'Name', value: channel.name || 'Unnamed', inline: true },
         { name: 'Type', value: String(channel.type), inline: true },
@@ -1081,7 +1061,7 @@ async function handleUtilityCommand(message, command, args) {
     }
     const embed = new EmbedBuilder()
       .setTitle('Role information')
-      .setColor(EMBED_RED)
+      .setColor(EMBED_BLACK)
       .addFields(
         { name: 'Name', value: role.name, inline: true },
         { name: 'Role ID', value: role.id, inline: true },
@@ -1187,7 +1167,7 @@ function configEmbed(guild) {
   const guildSettings = getGuildSettings(guild.id);
   return new EmbedBuilder()
     .setTitle('Anti-Nuke Configuration')
-    .setColor(EMBED_RED)
+    .setColor(EMBED_BLACK)
     .addFields(
       { name: 'Activity window', value: Math.round(guildSettings.windowMs / 1000) + ' seconds', inline: true },
       { name: 'Backup on risk', value: guildSettings.autoBackupOnRisk ? 'Enabled' : 'Disabled', inline: true },
@@ -1203,10 +1183,9 @@ function configEmbed(guild) {
 
 function dashboardEmbed(guild) {
   const guildSettings = getGuildSettings(guild.id);
-  const botStatus = getBotStatusSettings();
   return new EmbedBuilder()
     .setTitle('Anti-Nuke Dashboard')
-    .setColor(EMBED_RED)
+    .setColor(EMBED_BLACK)
     .addFields(
       { name: 'Protection', value: guildSettings.enabled ? 'Enabled' : 'Disabled', inline: true },
       { name: 'Dry run', value: guildSettings.dryRun ? 'Enabled' : 'Disabled', inline: true },
@@ -1217,16 +1196,30 @@ function dashboardEmbed(guild) {
       { name: 'Role delete', value: String(getThreshold(guild.id, 'role_delete')), inline: true },
       { name: 'Kick', value: String(getThreshold(guild.id, 'kick')), inline: true },
       { name: 'Ban', value: String(getThreshold(guild.id, 'ban')), inline: true },
-      { name: 'Bot status', value: botStatus.type + ': ' + botStatus.text, inline: false },
     );
 }
+
+const thresholdLabels = {
+  channel_create: 'Channel create / mass create',
+  channel_delete: 'Channel delete',
+  role_create: 'Role create / mass create',
+  role_delete: 'Role delete',
+  kick: 'Member kick',
+  ban: 'Member ban',
+};
 
 function dashboardComponents() {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('dashboard:threshold').setLabel('Set Threshold').setStyle(ButtonStyle.Danger),
+      new StringSelectMenuBuilder()
+        .setCustomId('dashboard:threshold:type')
+        .setPlaceholder('Choose a threshold to configure')
+        .addOptions(
+          ...Object.entries(thresholdLabels).map(([value, label]) => ({ label, value })),
+        ),
+    ),
+    new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('dashboard:window').setLabel('Set Time Window').setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId('dashboard:status').setLabel('Bot Status').setStyle(ButtonStyle.Danger),
       new ButtonBuilder().setCustomId('dashboard:toggle').setLabel('Enable / Disable').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('dashboard:refresh').setLabel('Refresh').setStyle(ButtonStyle.Secondary),
     ),
@@ -1236,30 +1229,29 @@ function dashboardComponents() {
 function helpNavigation(page) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('help:page:1').setLabel('Back').setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
+      new ButtonBuilder().setCustomId('help:page:1').setLabel('🙏🏻🙏🏻').setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
       new ButtonBuilder().setCustomId('help:page:2').setLabel('🙏🏻').setStyle(ButtonStyle.Danger).setDisabled(page === 2),
     ),
   ];
 }
 
-function textInputRow(customId, label, placeholder) {
-  return new ActionRowBuilder().addComponents(
-    new TextInputBuilder()
-      .setCustomId(customId)
-      .setLabel(label)
-      .setPlaceholder(placeholder)
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true),
-  );
+function textInputRow(customId, label, placeholder, value) {
+  const input = new TextInputBuilder()
+    .setCustomId(customId)
+    .setLabel(label)
+    .setPlaceholder(placeholder)
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
+  if (value !== undefined) input.setValue(String(value));
+  return new ActionRowBuilder().addComponents(input);
 }
 
-function thresholdModal() {
+function thresholdModal(guildId, type) {
   return new ModalBuilder()
-    .setCustomId('dashboard:threshold:modal')
-    .setTitle('Configure protection threshold')
+    .setCustomId('dashboard:threshold:modal:' + type)
+    .setTitle('Set ' + thresholdLabels[type] + ' threshold')
     .addComponents(
-      textInputRow('event', 'Event type', 'ban, kick, channel-create, role-create, mass-create'),
-      textInputRow('value', 'Actions allowed in the window', '1 to 100'),
+      textInputRow('value', 'Actions allowed in the window', '1 to 100', getThreshold(guildId, type)),
     );
 }
 
@@ -1268,16 +1260,6 @@ function windowModal() {
     .setCustomId('dashboard:window:modal')
     .setTitle('Configure activity window')
     .addComponents(textInputRow('seconds', 'Window in seconds', '5 to 3600'));
-}
-
-function statusModal() {
-  return new ModalBuilder()
-    .setCustomId('dashboard:status:modal')
-    .setTitle('Change bot status')
-    .addComponents(
-      textInputRow('type', 'Status type', 'playing, watching, listening, competing'),
-      textInputRow('text', 'Status text', 'security monitoring'),
-    );
 }
 
 function auditActionLabel(action) {
@@ -1297,7 +1279,7 @@ async function auditEmbed(guild, requestedLimit) {
 
   return new EmbedBuilder()
     .setTitle('Recent audit activity')
-    .setColor(EMBED_RED)
+    .setColor(EMBED_BLACK)
     .setDescription(
       lines.length
         ? lines.join('\n').slice(0, 3900)
@@ -1587,7 +1569,7 @@ async function handleBackupCommand(message, args) {
 
 client.once('ready', async () => {
   console.log('Bot logged in as ' + client.user.tag);
-  applyBotStatus();
+  client.user.setPresence({ activities: [], status: 'online' });
   await startMediaRotation('avatar');
   await startMediaRotation('banner');
 });
@@ -1717,6 +1699,20 @@ client.on('interactionCreate', async (interaction) => {
   try {
     if (!interaction.inGuild()) return;
 
+    if (interaction.isStringSelectMenu() && interaction.customId === 'dashboard:threshold:type') {
+      if (!isAdministrator(interaction.member)) {
+        await interaction.reply({ content: 'Administrator permission required.', ephemeral: true });
+        return;
+      }
+      const type = interaction.values[0];
+      if (!thresholdLabels[type]) {
+        await interaction.reply({ content: 'That threshold is not available.', ephemeral: true });
+        return;
+      }
+      await interaction.showModal(thresholdModal(interaction.guild.id, type));
+      return;
+    }
+
     if (interaction.isButton()) {
       if (interaction.customId.startsWith('help:page:')) {
         const page = interaction.customId.endsWith(':2') ? 2 : 1;
@@ -1730,16 +1726,8 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      if (interaction.customId === 'dashboard:threshold') {
-        await interaction.showModal(thresholdModal());
-        return;
-      }
       if (interaction.customId === 'dashboard:window') {
         await interaction.showModal(windowModal());
-        return;
-      }
-      if (interaction.customId === 'dashboard:status') {
-        await interaction.showModal(statusModal());
         return;
       }
       if (interaction.customId === 'dashboard:toggle') {
@@ -1762,18 +1750,17 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    if (interaction.customId === 'dashboard:threshold:modal') {
-      const rawType = interaction.fields.getTextInputValue('event').trim().toLowerCase();
-      const type = thresholdNames[rawType];
+    if (interaction.customId.startsWith('dashboard:threshold:modal:')) {
+      const type = interaction.customId.slice('dashboard:threshold:modal:'.length);
       const value = Number.parseInt(interaction.fields.getTextInputValue('value').trim(), 10);
-      if (!type || !Number.isInteger(value) || value < 1 || value > 100) {
-        await interaction.reply({ content: 'Invalid threshold. Use ban, kick, channel-create, channel-delete, role-create, role-delete, or mass-create with a value from 1 to 100.', ephemeral: true });
+      if (!thresholdLabels[type] || !Number.isInteger(value) || value < 1 || value > 100) {
+        await interaction.reply({ content: 'Choose a valid threshold value from 1 to 100.', ephemeral: true });
         return;
       }
       const guildSettings = getGuildSettings(interaction.guild.id);
       guildSettings.thresholds[type] = value;
       saveSettings();
-      await interaction.reply({ content: 'Updated ' + type.replace(/_/g, ' ') + ' threshold to ' + value + '.', ephemeral: true });
+      await interaction.reply({ content: thresholdLabels[type] + ' threshold updated to ' + value + '.', ephemeral: true });
       return;
     }
 
@@ -1790,18 +1777,6 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    if (interaction.customId === 'dashboard:status:modal') {
-      const type = interaction.fields.getTextInputValue('type').trim().toLowerCase();
-      const text = interaction.fields.getTextInputValue('text').trim().slice(0, 128);
-      if (!Object.prototype.hasOwnProperty.call(BOT_STATUS_TYPES, type) || !text) {
-        await interaction.reply({ content: 'Use a valid status type: playing, streaming, listening, watching, or competing.', ephemeral: true });
-        return;
-      }
-      settings.__botStatus = { type, text };
-      saveSettings();
-      applyBotStatus();
-      await interaction.reply({ content: 'Bot status updated to ' + type + ': ' + text, ephemeral: true });
-    }
   } catch (error) {
     console.error('Interaction handling error:', error.message);
     if (interaction.deferred || interaction.replied) return;
