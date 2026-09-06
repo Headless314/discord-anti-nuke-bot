@@ -658,19 +658,13 @@ async function recordActivity({
 }
 
 function helpEmbed(command) {
-  const banner =
-    '+--------------------------------------+\n' +
-    '|           ANTI-NUKE CONTROL          |\n' +
-    '|              COMMAND HELP            |\n' +
-    '+--------------------------------------+';
   const embed = new EmbedBuilder()
-    .setTitle('Anti-nuke command center')
-    .setColor(0x050505)
-    .setDescription('```text\n' + banner + '\n```\nPrefix: `' + config.prefix + '`');
+    .setTitle('Anti-Nuke Command Center')
+    .setColor(0x0b0f14);
 
   if (command === 'whitelist' || command === 'wl') {
     return embed.addFields({
-      name: 'Whitelist commands',
+      name: '🔐 Whitelist Commands',
       value:
         '`>whitelist add @user` - Owner-only shorthand\n' +
         '`>whitelist user add <id>`\n' +
@@ -684,7 +678,7 @@ function helpEmbed(command) {
 
   if (command === 'backup') {
     return embed.addFields({
-      name: 'Backup commands',
+      name: '💾 Backup Commands',
       value:
         '`>backup create` - Save server structure\n' +
         '`>backup list` - List this server backups\n' +
@@ -694,7 +688,7 @@ function helpEmbed(command) {
 
   if (command === 'admin') {
     return embed.addFields({
-      name: 'Administrator alerts',
+      name: '📣 Administrator Alerts',
       value:
         '`>admin add <id>` - Add an administrator alert recipient\n' +
         '`>admin remove <id>` - Remove a recipient\n' +
@@ -705,7 +699,7 @@ function helpEmbed(command) {
 
   if (command === 'audit' || command === 'logs') {
     return embed.addFields({
-      name: 'Audit commands',
+      name: '📋 Audit Commands',
       value:
         '`>audit recent` - Show recent server audit entries\n' +
         '`>audit recent 15` - Show up to 15 entries',
@@ -714,22 +708,7 @@ function helpEmbed(command) {
 
   if (command === 'utility' || command === 'tools') {
     return embed.addFields({
-      name: 'Utility and moderation commands',
-      value:
-        '`>ping` - Check bot latency\n' +
-        '`>serverinfo` - Show server details\n' +
-        '`>userinfo [@user]` - Show user details\n' +
-        '`>channelinfo [#channel]` - Show channel details\n' +
-        '`>roleinfo <@role>` - Show role details\n' +
-        '`>purge <1-100>` - Delete recent messages\n' +
-        '`>slowmode <0-21600>` - Set channel slowmode\n' +
-        '`>lockdown on|off|status` - Lock or unlock text channels',
-    });
-  }
-
-  if (command === 'utility' || command === 'tools') {
-    return embed.addFields({
-      name: 'Utility and moderation commands',
+      name: '🛠️ Utility and Moderation Commands',
       value:
         '`>ping` - Check bot latency\n' +
         '`>serverinfo` - Show server details\n' +
@@ -744,7 +723,7 @@ function helpEmbed(command) {
 
   if (command === 'config') {
     return embed.addFields({
-      name: 'Configuration commands',
+      name: '⚙️ Configuration Commands',
       value:
         '`>config show` - Show server overrides\n' +
         '`>config threshold <type> <number>`\n' +
@@ -756,7 +735,7 @@ function helpEmbed(command) {
 
   return embed.addFields(
     {
-      name: 'Protection',
+      name: '🛡️ Protection',
       value:
         '`>antinuke status` - Show protection status\n' +
         '`>antinuke enable` - Enable automatic mitigation\n' +
@@ -766,20 +745,20 @@ function helpEmbed(command) {
         '`>setup` - Save this channel for security logs',
     },
     {
-      name: 'Access control',
+      name: '🔐 Access Control',
       value:
         '`>whitelist ...` - Manage users, roles, channels, and categories\n' +
         '`>admin ...` - Manage risk alert recipients',
     },
     {
-      name: 'Backups',
+      name: '💾 Backups',
       value:
         '`>backup create` - Snapshot roles, channels, categories, and overwrites\n' +
         '`>backup list` - List saved snapshots\n' +
         '`>backup inspect <file>` - Inspect a snapshot',
     },
     {
-      name: 'Help',
+      name: '📚 Help and Status',
       value:
         '`>help whitelist`   `>help backup`   `>help admin`\n' +
         '`>help audit`       `>help config`   `>help utility`\n' +
