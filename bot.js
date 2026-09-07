@@ -262,6 +262,7 @@ async function startMediaRotation(kind) {
   mediaRotationTimers[kind] = setInterval(() => {
     applyRotatingMedia(kind).catch((error) => console.error('Media rotation error:', error.message));
   }, 60 * 60 * 1000);
+  return applied;
 }
 
 function lastMediaCommandTimestamp(messages, message, kind) {
