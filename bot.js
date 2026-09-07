@@ -373,12 +373,14 @@ async function handleDirectMessageCommand(message) {
 
   if (command === 'status' || command === 'botstatus' || command === 'presence') {
     const status = args.shift()?.toLowerCase();
-    if (!['online', 'idle', 'dnd', 'invisible'].includes(status)) {
+    if (!presenceStatuses.includes(status)) {
       await sendCommandResponse(message, 'use >status online, >status idle, >status dnd, or >status invisible.');
       return;
     }
-    client.user.setPresence({ activities: [], status });
-    await sendCommandResponse(message, 'bot status changed to ' + status + '.');
+    botPresenceStatus = status;
+    client.user.setPresence({ activities: [], status: botPresenceStatus });
+    saveRuntimeState();
+    await sendCommandResponse(message, 'bot status changed to ' + botPresenceStatus + '.');
     return;
   }
 
@@ -571,6 +573,8 @@ async function isWhitelisted(guild, executorId, target, type) {
 
 const activity = new Collection();
 const mitigations = new Collection();
+const presenceStatuses = ['online', 'idle', 'dnd', 'invisible'];
+let botPresenceStatus = 'online';
 
 
 function saveRuntimeState() {
@@ -590,7 +594,7 @@ function saveRuntimeState() {
   fs.mkdirSync(dataDirectory, { recursive: true });
   fs.writeFileSync(
     runtimeFile,
-    JSON.stringify({ savedAt: new Date().toISOString(), activity: persistedActivity }, null, 2) + '\n',
+    JSON.stringify({ savedAt: new Date().toISOString(), activity: persistedActivity, presenceStatus: botPresenceStatus }, null, 2) + '\n',
     { mode: 0o600 },
   );
 }
@@ -598,7 +602,9 @@ function saveRuntimeState() {
 function restoreRuntimeState() {
   try {
     const saved = JSON.parse(fs.readFileSync(runtimeFile, 'utf8'));
-    if (!saved || !Array.isArray(saved.activity)) return;
+    if (!saved) return;
+    if (presenceStatuses.includes(saved.presenceStatus)) botPresenceStatus = saved.presenceStatus;
+    if (!Array.isArray(saved.activity)) return;
     const now = Date.now();
     for (const record of saved.activity) {
       if (!record || typeof record.key !== 'string') continue;
@@ -1633,7 +1639,7 @@ async function handleBackupCommand(message, args) {
 
 client.once('ready', async () => {
   console.log('Bot logged in as ' + client.user.tag);
-  client.user.setPresence({ activities: [], status: 'online' });
+  client.user.setPresence({ activities: [], status: botPresenceStatus });
   await startMediaRotation('avatar');
   await startMediaRotation('banner');
 });
