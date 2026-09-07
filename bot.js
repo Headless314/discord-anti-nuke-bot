@@ -10,6 +10,7 @@ const {
   GatewayIntentBits,
   ModalBuilder,
   PermissionFlagsBits,
+  Partials,
   StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -83,8 +84,10 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildBans,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.DirectMessages,
     GatewayIntentBits.MessageContent,
   ],
+  partials: [Partials.Channel],
 });
 
 const numberFromEnv = (name, fallback, minimum = 1) => {
