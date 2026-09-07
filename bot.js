@@ -305,8 +305,11 @@ async function saveRotatingMediaFromDm(message, kind) {
 }
 
 async function sendCommandResponse(message, payload) {
+  const responsePayload = typeof payload === 'string'
+    ? { embeds: [new EmbedBuilder().setDescription(String.fromCharCode(96).repeat(3) + 'diff\n- ' + payload + '\n' + String.fromCharCode(96).repeat(3))] }
+    : payload;
   const deletePromise = message.delete().catch(() => {});
-  const response = await message.channel.send(payload);
+  const response = await message.channel.send(responsePayload);
   void deletePromise;
   return response;
 }
@@ -317,14 +320,36 @@ async function handleDirectMessageCommand(message) {
   if (!commandText) return;
   const args = commandText.split(/ +/);
   const command = args.shift().toLowerCase();
+
+  if (command === 'help' || command === 'dmhelp') {
+    await sendCommandResponse(message, { embeds: [dmHelpEmbed()] });
+    return;
+  }
+
+  if (command === 'status' || command === 'botstatus' || command === 'presence') {
+    const status = args.shift()?.toLowerCase();
+    if (!['online', 'idle', 'dnd', 'invisible'].includes(status)) {
+      await sendCommandResponse(message, 'use >status online, >status idle, >status dnd, or >status invisible.');
+      return;
+    }
+    client.user.setPresence({ activities: [], status });
+    await sendCommandResponse(message, 'bot status changed to ' + status + '.');
+    return;
+  }
+
   if (command === 'pfp' || command === 'avatar') {
     await saveRotatingMediaFromDm(message, 'avatar');
   } else if (command === 'banner') {
     await saveRotatingMediaFromDm(message, 'banner');
+  } else {
+    await sendCommandResponse(message, 'dm commands: >help, >pfp, >banner, or >status.');
   }
 }
 
-function getGuildSettings(guildId) {
+function dmHelpEmbed() {
+  const tick = String.fromCharCode(96).repeat(3);
+  return new EmbedBuilder().setDescription(tick + 'diff\n- >pfp\n- >banner\n- >status <online|idle|dnd|invisible>\n' + tick);
+}function getGuildSettings(guildId) {
   const guildSettings = settings[guildId] || {};
   guildSettings.enabled = guildSettings.enabled !== false;
   guildSettings.dryRun = guildSettings.dryRun === true;
@@ -869,141 +894,93 @@ async function recordActivity({
 }
 
 function helpEmbed(command, page = 1) {
-  const commandText = (value) => String.fromCharCode(96) + value + String.fromCharCode(96);
+  const commandList = (...commands) => {
+    const tick = String.fromCharCode(96).repeat(3);
+    return tick + 'diff\n' + commands.map((value) => '- ' + value).join('\n') + '\n' + tick;
+  };
   const embed = new EmbedBuilder();
 
   if (command === 'whitelist' || command === 'wl') {
     return embed.addFields({
-      name: 'Whitelist Commands',
-      value:
-        commandText('>whitelist add @user') + ' - Owner-only shorthand\n' +
-        commandText('>whitelist user add <id>') + '\n' +
-        commandText('>whitelist user remove <id>') + '\n' +
-        commandText('>whitelist channel add <id>') + '\n' +
-        commandText('>whitelist category add <id>') + '\n' +
-        commandText('>whitelist role add <id>') + '\n' +
-        commandText('>whitelist list'),
+      name: 'whitelist commands',
+      value: commandList(
+        '>whitelist add @user',
+        '>whitelist user add <id>',
+        '>whitelist user remove <id>',
+        '>whitelist channel add <id>',
+        '>whitelist category add <id>',
+        '>whitelist role add <id>',
+        '>whitelist list',
+      ),
     });
   }
 
   if (command === 'backup') {
     return embed.addFields({
-      name: 'Backup Commands',
-      value:
-        commandText('>backup create') + ' - Save server structure\n' +
-        commandText('>backup list') + ' - List this server backups\n' +
-        commandText('>backup inspect <file>') + ' - Inspect one backup',
+      name: 'backup commands',
+      value: commandList('>backup create', '>backup list', '>backup inspect <file>'),
     });
   }
 
   if (command === 'admin') {
     return embed.addFields({
-      name: 'Administrator Alerts',
-      value:
-        commandText('>admin add <id>') + ' - Add an administrator alert recipient\n' +
-        commandText('>admin remove <id>') + ' - Remove a recipient\n' +
-        commandText('>admin list') + ' - List configured recipients\n' +
-        commandText('>admin test') + ' - Send a test alert',
+      name: 'admin commands',
+      value: commandList('>admin add <id>', '>admin remove <id>', '>admin list', '>admin test'),
     });
   }
 
   if (command === 'audit' || command === 'logs') {
     return embed.addFields({
-      name: 'Audit Commands',
-      value:
-        commandText('>audit recent') + ' - Show recent server audit entries\n' +
-        commandText('>audit recent 15') + ' - Show up to 15 entries',
+      name: 'audit commands',
+      value: commandList('>audit recent', '>audit recent 15'),
     });
   }
 
   if (command === 'utility' || command === 'tools') {
     return embed.addFields({
-      name: 'Utility and Moderation Commands',
-      value:
-        commandText('>ping') + ' - Check bot latency\n' +
-        commandText('>serverinfo') + ' - Show server details\n' +
-        commandText('>userinfo [@user]') + ' - Show user details\n' +
-        commandText('>channelinfo [#channel]') + ' - Show channel details\n' +
-        commandText('>roleinfo <@role>') + ' - Show role details\n' +
-        commandText('>purge <1-100>') + ' - Delete recent messages\n' +
-        commandText('>slowmode <0-21600>') + ' - Set channel slowmode\n' +
-        commandText('>lockdown on|off|status') + ' - Lock or unlock text channels',
+      name: 'utility commands',
+      value: commandList(
+        '>ping',
+        '>serverinfo',
+        '>userinfo [@user]',
+        '>channelinfo [#channel]',
+        '>roleinfo <@role>',
+        '>purge <1-100>',
+        '>slowmode <0-21600>',
+        '>lockdown on|off|status',
+      ),
     });
   }
 
   if (command === 'config') {
     return embed.addFields({
-      name: 'Configuration Commands',
-      value:
-        commandText('>config show') + ' - Show server overrides\n' +
-        commandText('>config threshold <type> <number>') + '\n' +
-        commandText('>config window <seconds>') + '\n' +
-        commandText('>config backup on|off') + '\n' +
-        commandText('>config dry-run on|off'),
+      name: 'config commands',
+      value: commandList(
+        '>config show',
+        '>config threshold <type> <number>',
+        '>config window <seconds>',
+        '>config backup on|off',
+        '>config dry-run on|off',
+      ),
     });
   }
 
   const pageNumber = page === 2 ? 2 : 1;
   if (pageNumber === 1) {
     return embed.addFields(
-      {
-        name: 'Protection',
-        value:
-          commandText('>antinuke status') + ' - Show protection status\n' +
-          commandText('>antinuke enable') + ' - Enable automatic mitigation\n' +
-          commandText('>antinuke disable') + ' - Disable automatic mitigation\n' +
-          commandText('>antinuke dry-run on|off') + ' - Preview mitigation\n' +
-          commandText('>antinuke reset') + ' - Clear activity counters\n' +
-          commandText('>setup') + ' - Save this channel for security logs',
-      },
-      {
-        name: 'Dashboard',
-        value:
-          commandText('>dashboard') + ' - Open the interactive control panel\n' +
-          commandText('>status') + ' - Alias for ' + commandText('>antinuke status'),
-      },
-      {
-        name: 'Access Control',
-        value:
-          commandText('>whitelist ...') + ' - Manage trusted users, roles, channels, and categories\n' +
-          commandText('>admin ...') + ' - Manage risk alert recipients',
-      },
+      { name: 'protection', value: commandList('>antinuke status', '>antinuke enable', '>antinuke disable', '>antinuke dry-run on|off', '>antinuke reset', '>setup') },
+      { name: 'dashboard', value: commandList('>dashboard', '>status') },
+      { name: 'access control', value: commandList('>whitelist ...', '>admin ...') },
     );
   }
 
   return embed.addFields(
-    {
-      name: 'Backups',
-      value:
-        commandText('>backup create') + ' - Snapshot roles, channels, categories, and overwrites\n' +
-        commandText('>backup list') + ' - List saved snapshots\n' +
-        commandText('>backup inspect <file>') + ' - Inspect a snapshot',
-    },
-    {
-      name: 'Utilities',
-      value:
-        commandText('>ping') + '  ' + commandText('>serverinfo') + '  ' + commandText('>userinfo') + '  ' + commandText('>channelinfo') + '\n' +
-        commandText('>roleinfo') + '  ' + commandText('>purge') + '  ' + commandText('>slowmode') + '  ' + commandText('>lockdown'),
-    },
-    {
-      name: 'Configuration',
-      value:
-        commandText('>config show') + ' - Show server overrides\n' +
-        commandText('>config threshold <type> <number>') + '\n' +
-        commandText('>config window <seconds>') + '\n' +
-        commandText('>config backup on|off') + '\n' +
-        commandText('>config dry-run on|off'),
-    },
-    {
-      name: 'Detailed Help',
-      value:
-        commandText('>help whitelist') + '  ' + commandText('>help backup') + '  ' + commandText('>help admin') + '\n' +
-        commandText('>help audit') + '  ' + commandText('>help config') + '  ' + commandText('>help utility'),
-    },
+    { name: 'backups', value: commandList('>backup create', '>backup list', '>backup inspect <file>') },
+    { name: 'utilities', value: commandList('>ping', '>serverinfo', '>userinfo', '>channelinfo', '>roleinfo', '>purge', '>slowmode', '>lockdown') },
+    { name: 'configuration', value: commandList('>config show', '>config threshold <type> <number>', '>config window <seconds>', '>config backup on|off', '>config dry-run on|off') },
+    { name: 'detailed help', value: commandList('>help whitelist', '>help backup', '>help admin', '>help audit', '>help config', '>help utility') },
   );
-}
-
-function statusEmbed(guild) {
+}function statusEmbed(guild) {
   const guildSettings = getGuildSettings(guild.id);
   const whitelist = guildSettings.whitelist;
   return new EmbedBuilder()
