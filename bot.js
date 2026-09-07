@@ -189,6 +189,7 @@ const settings = loadSettings();
 
 
 const mediaRotationTimers = { avatar: null, banner: null };
+const mediaRotationErrors = { avatar: null, banner: null };
 
 function getMediaRotation(kind) {
   const saved = settings.__rotatingMedia && settings.__rotatingMedia[kind];
@@ -225,19 +226,30 @@ async function applyRotatingMedia(kind) {
   if (!client.user) return false;
   const rotation = getMediaRotation(kind);
   const items = rotation.items.filter((item) => getMediaPath(item) && fs.existsSync(getMediaPath(item)));
-  if (!items.length) return false;
+  if (!items.length) {
+    mediaRotationErrors[kind] = 'no saved images';
+    return false;
+  }
   const index = rotation.index % items.length;
   const item = items[index];
   const filePath = getMediaPath(item);
   try {
     const buffer = fs.readFileSync(filePath);
-    if (kind === 'avatar') await client.user.setAvatar(buffer);
-    else await client.user.setBanner(buffer);
+    const extension = path.extname(filePath).slice(1).toLowerCase();
+    const mimeType = extension === 'jpg' || extension === 'jpeg' ? 'jpeg' : extension;
+    const imageData = 'data:image/' + mimeType + ';base64,' + buffer.toString('base64');
+    if (kind === 'avatar') await client.user.setAvatar(imageData);
+    else {
+      if (typeof client.user.setBanner !== 'function') throw new Error('this discord.js version does not support bot banners');
+      await client.user.setBanner(imageData);
+    }
+    mediaRotationErrors[kind] = null;
     settings.__rotatingMedia = settings.__rotatingMedia || {};
     settings.__rotatingMedia[kind] = { items, index: (index + 1) % items.length };
     saveSettings();
     return true;
   } catch (error) {
+    mediaRotationErrors[kind] = error.message;
     console.error('Could not rotate ' + kind + ':', error.message);
     return false;
   }
@@ -246,7 +258,7 @@ async function applyRotatingMedia(kind) {
 async function startMediaRotation(kind) {
   if (mediaRotationTimers[kind]) clearInterval(mediaRotationTimers[kind]);
   if (!client.user) return;
-  await applyRotatingMedia(kind);
+  const applied = await applyRotatingMedia(kind);
   mediaRotationTimers[kind] = setInterval(() => {
     applyRotatingMedia(kind).catch((error) => console.error('Media rotation error:', error.message));
   }, 60 * 60 * 1000);
@@ -304,8 +316,12 @@ async function saveRotatingMediaFromDm(message, kind) {
     settings.__rotatingMedia = settings.__rotatingMedia || {};
     settings.__rotatingMedia[kind] = { items: savedItems, index: 0 };
     saveSettings();
-    await startMediaRotation(kind);
-    await sendCommandResponse(message, 'Saved ' + savedItems.length + ' ' + kind + ' image(s). Rotation will change every hour.');
+    const applied = await startMediaRotation(kind);
+    if (!applied) {
+      await sendCommandResponse(message, 'saved ' + savedItems.length + ' ' + kind + ' image(s), but discord rejected it: ' + (mediaRotationErrors[kind] || 'unknown upload error') + '.');
+      return;
+    }
+    await sendCommandResponse(message, 'saved ' + savedItems.length + ' ' + kind + ' image(s). rotation will change every hour.');
   } catch (error) {
     for (const item of savedItems) {
       const filePath = getMediaPath(item);
@@ -359,6 +375,18 @@ async function sendCommandResponse(message, payload) {
   return response;
 }
 
+async function advanceRotatingMedia(message, kind) {
+  if (!config.ownerUserId || message.author.id !== config.ownerUserId) {
+    await sendCommandResponse(message, 'this command is owner-only.');
+    return;
+  }
+  const applied = await applyRotatingMedia(kind);
+  if (!applied) {
+    await sendCommandResponse(message, 'could not change ' + kind + ': ' + (mediaRotationErrors[kind] || 'no saved images') + '.');
+    return;
+  }
+  await sendCommandResponse(message, kind + ' changed to the next image.');
+}
 async function handleDirectMessageCommand(message) {
   if (!config.ownerUserId || message.author.id !== config.ownerUserId) return;
   const commandText = message.content.slice(config.prefix.length).trim();
@@ -1021,6 +1049,7 @@ function helpEmbed(command, page = 1) {
     return embed.addFields(
       { name: 'protection', value: commandList('>antinuke status', '>antinuke enable', '>antinuke disable', '>antinuke dry-run on|off', '>antinuke reset', '>setup') },
       { name: 'dashboard', value: commandList('>dashboard', '>status') },
+      { name: 'media', value: commandList('>next pfp', '>next banner') },
       { name: 'access control', value: commandList('>whitelist ...', '>admin ...') },
     );
   }
@@ -1866,7 +1895,12 @@ client.on('messageCreate', async (message) => {
   const args = commandText.split(/ +/);
   const command = args.shift().toLowerCase();
 
-  if (command === 'help') {
+  if (command === 'next') {
+    const mediaKind = args.shift()?.toLowerCase();
+    if (mediaKind === 'pfp' || mediaKind === 'avatar') await advanceRotatingMedia(message, 'avatar');
+    else if (mediaKind === 'banner') await advanceRotatingMedia(message, 'banner');
+    else await sendCommandResponse(message, 'use >next pfp or >next banner.');
+  } else if (command === 'help') {
     const section = args.shift()?.toLowerCase();
     await sendCommandResponse(message, {
       embeds: [helpEmbed(section)],
