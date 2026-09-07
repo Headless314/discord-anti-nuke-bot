@@ -312,12 +312,46 @@ async function saveRotatingMediaFromDm(message, kind) {
   }
 }
 
+function diffBlock(lines) {
+  const tick = String.fromCharCode(96).repeat(3);
+  return tick + 'diff\n' + lines.filter(Boolean).map((line) => line.startsWith('- ') ? line : '- ' + line).join('\n') + '\n' + tick;
+}
+
+function plainCommandPayload(payload) {
+  if (typeof payload === 'string') return { content: diffBlock([payload]) };
+  if (!payload || !Array.isArray(payload.embeds) || !payload.embeds.length) return payload;
+  const tick = String.fromCharCode(96).repeat(3);
+  const diffPrefix = tick + 'diff\n';
+  const diffSuffix = '\n' + tick;
+  const lines = [];
+  const addValue = (value, label) => {
+    if (value === undefined || value === null || value === '') return;
+    const text = String(value);
+    const trimmed = text.trim();
+    if (trimmed.startsWith(diffPrefix) && trimmed.endsWith(diffSuffix)) {
+      const inner = trimmed.slice(diffPrefix.length, -diffSuffix.length);
+      lines.push(...inner.split('\n').filter(Boolean).map((line) => line.startsWith('- ') ? line : '- ' + line));
+      return;
+    }
+    text.split('\n').filter(Boolean).forEach((line, index) => lines.push('- ' + (index === 0 && label ? label + ': ' : '') + line));
+  };
+  for (const embed of payload.embeds) {
+    const data = embed.data || embed;
+    addValue(data.title);
+    addValue(data.description);
+    for (const field of data.fields || []) {
+      addValue(field.value, field.name);
+    }
+    addValue(data.footer?.text);
+  }
+  const responsePayload = { content: diffBlock(lines) };
+  if (payload.components) responsePayload.components = payload.components;
+  return responsePayload;
+}
+
 async function sendCommandResponse(message, payload) {
-  const responsePayload = typeof payload === 'string'
-    ? { embeds: [new EmbedBuilder().setDescription(String.fromCharCode(96).repeat(3) + 'diff\n- ' + payload + '\n' + String.fromCharCode(96).repeat(3))] }
-    : payload;
   const deletePromise = message.delete().catch(() => {});
-  const response = await message.channel.send(responsePayload);
+  const response = await message.channel.send(plainCommandPayload(payload));
   void deletePromise;
   return response;
 }
@@ -1743,7 +1777,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton()) {
       if (interaction.customId.startsWith('help:page:')) {
         const page = interaction.customId.endsWith(':2') ? 2 : 1;
-        await interaction.update({ embeds: [helpEmbed(null, page)], components: helpNavigation(page) });
+        await interaction.update(plainCommandPayload({ embeds: [helpEmbed(null, page)], components: helpNavigation(page) }));
         return;
       }
 
@@ -1761,11 +1795,11 @@ client.on('interactionCreate', async (interaction) => {
         const guildSettings = getGuildSettings(interaction.guild.id);
         guildSettings.enabled = !guildSettings.enabled;
         saveSettings();
-        await interaction.update({ embeds: [dashboardEmbed(interaction.guild)], components: dashboardComponents() });
+        await interaction.update(plainCommandPayload({ embeds: [dashboardEmbed(interaction.guild)], components: dashboardComponents() }));
         return;
       }
       if (interaction.customId === 'dashboard:refresh') {
-        await interaction.update({ embeds: [dashboardEmbed(interaction.guild)], components: dashboardComponents() });
+        await interaction.update(plainCommandPayload({ embeds: [dashboardEmbed(interaction.guild)], components: dashboardComponents() }));
       }
       return;
     }
