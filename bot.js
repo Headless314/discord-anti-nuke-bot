@@ -22,13 +22,21 @@ dotenv.config();
 
 const lowercaseEmbedText = (value) => typeof value === 'string' ? value.toLowerCase() : value;
 
+const diffEmbedText = (value) => {
+  if (typeof value !== 'string') return value;
+  const tick = String.fromCharCode(96).repeat(3);
+  const prefix = tick + 'diff\n';
+  if (value.startsWith(prefix) && value.endsWith('\n' + tick)) return value;
+  return prefix + value.split('\n').map((line) => '- ' + line).join('\n') + '\n' + tick;
+};
+
 class LowercaseEmbedBuilder extends DiscordEmbedBuilder {
   setTitle(title) {
     return super.setTitle(lowercaseEmbedText(title));
   }
 
   setDescription(description) {
-    return super.setDescription(lowercaseEmbedText(description));
+    return super.setDescription(diffEmbedText(lowercaseEmbedText(description)));
   }
 
   addFields(...fields) {
@@ -39,7 +47,7 @@ class LowercaseEmbedBuilder extends DiscordEmbedBuilder {
         return {
           ...field,
           ...(field.name !== undefined ? { name: lowercaseEmbedText(field.name) } : {}),
-          ...(field.value !== undefined ? { value: lowercaseEmbedText(field.value) } : {}),
+          ...(field.value !== undefined ? { value: diffEmbedText(lowercaseEmbedText(field.value)) } : {}),
           inline: true,
         };
       });
