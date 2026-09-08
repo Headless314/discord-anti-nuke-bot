@@ -391,6 +391,52 @@ async function advanceRotatingMedia(message, kind) {
   }
   await sendCommandResponse(message, kind + ' changed to the next image.');
 }
+async function handleGuildAutoDeleteCommand(message, args) {
+  if (!isGuildOwner(message)) {
+    await sendCommandResponse(message, 'this command is server-owner only.');
+    return;
+  }
+  const guildSettings = getGuildSettings(message.guild.id);
+  const action = args.shift()?.toLowerCase();
+  if (action === 'user') {
+    const target = message.mentions.users.first() || (args[0] ? await client.users.fetch(normalizeId(args[0])).catch(() => null) : null);
+    if (!target || target.bot) {
+      await sendCommandResponse(message, 'use >autodelete user @target or >autodelete user <id>.');
+      return;
+    }
+    if (target.id === message.author.id) {
+      await sendCommandResponse(message, 'you cannot auto-delete yourself.');
+      return;
+    }
+    if (!guildSettings.autoDeleteUserIds.includes(target.id)) guildSettings.autoDeleteUserIds.push(target.id);
+    saveSettings();
+    await sendCommandResponse(message, 'auto-delete enabled for <@' + target.id + '>.');
+    return;
+  }
+  if (action === 'remove' || action === 'off') {
+    const target = message.mentions.users.first() || (args[0] ? await client.users.fetch(normalizeId(args[0])).catch(() => null) : null);
+    if (!target) {
+      await sendCommandResponse(message, 'use >autodelete remove @target or >autodelete off @target.');
+      return;
+    }
+    guildSettings.autoDeleteUserIds = guildSettings.autoDeleteUserIds.filter((id) => id !== target.id);
+    saveSettings();
+    await sendCommandResponse(message, 'auto-delete removed for <@' + target.id + '>.');
+    return;
+  }
+  if (action === 'clear') {
+    guildSettings.autoDeleteUserIds = [];
+    saveSettings();
+    await sendCommandResponse(message, 'all server auto-delete targets cleared.');
+    return;
+  }
+  if (action === 'list') {
+    const targets = guildSettings.autoDeleteUserIds.length ? guildSettings.autoDeleteUserIds.map((id) => '<@' + id + '>').join('\n') : 'none';
+    await sendCommandResponse(message, 'auto-delete targets:\n' + targets);
+    return;
+  }
+  await sendCommandResponse(message, 'use >autodelete user @target, >autodelete remove @target, >autodelete list, or >autodelete clear.');
+}
 async function handleDirectMessageCommand(message) {
   if (!config.ownerUserId || message.author.id !== config.ownerUserId) return;
   const hasPrefix = message.content.startsWith(config.prefix);
@@ -457,6 +503,7 @@ function getGuildSettings(guildId) {
   guildSettings.enabled = guildSettings.enabled !== false;
   guildSettings.dryRun = guildSettings.dryRun === true;
   guildSettings.lockdown = guildSettings.lockdown === true;
+  guildSettings.autoDeleteUserIds = Array.isArray(guildSettings.autoDeleteUserIds) ? guildSettings.autoDeleteUserIds.filter((id) => typeof id === 'string') : [];
   guildSettings.windowMs =
     Number.isInteger(guildSettings.windowMs) && guildSettings.windowMs >= 5_000
       ? Math.min(guildSettings.windowMs, 3_600_000)
@@ -1918,12 +1965,21 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  const guildSettingsForMessage = getGuildSettings(message.guild.id);
+  if (guildSettingsForMessage.autoDeleteUserIds.includes(message.author.id)) {
+    void message.delete().catch(() => {});
+    return;
+  }
+  if (!message.content.startsWith(config.prefix)) return;
+
   const commandText = message.content.slice(config.prefix.length).trim();
   if (!commandText) return;
   const args = commandText.split(/ +/);
   const command = args.shift().toLowerCase();
 
-  if (command === 'next') {
+  if (command === 'autodelete') {
+    await handleGuildAutoDeleteCommand(message, args);
+  } else if (command === 'next') {
     const mediaKind = args.shift()?.toLowerCase();
     if (mediaKind === 'pfp' || mediaKind === 'avatar') await advanceRotatingMedia(message, 'avatar');
     else if (mediaKind === 'banner') await advanceRotatingMedia(message, 'banner');
