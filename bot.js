@@ -98,10 +98,15 @@ const booleanFromEnv = (name, fallback) => {
   return ['1', 'true', 'yes', 'on'].includes(process.env[name].toLowerCase());
 };
 
+const normalizeCommandPrefix = (value) => {
+  const prefix = String(value ?? '').trim();
+  return prefix && prefix.length <= 5 && !/\s/.test(prefix) ? prefix : null;
+};
+
 const config = {
   token: process.env.DISCORD_TOKEN,
   ownerUserId: process.env.OWNER_USER_ID || null,
-  prefix: process.env.COMMAND_PREFIX || '>',
+  prefix: normalizeCommandPrefix(process.env.COMMAND_PREFIX) || '>',
   defaultLogChannelId: process.env.LOG_CHANNEL_ID || null,
   windowMs: numberFromEnv('NUKE_WINDOW_MS', 30_000, 1_000),
   autoBackupOnRisk: booleanFromEnv('AUTO_BACKUP_ON_RISK', true),
@@ -206,6 +211,8 @@ function loadSettings() {
 }
 
 const settings = loadSettings();
+const savedCommandPrefix = normalizeCommandPrefix(settings.__commandPrefix);
+if (savedCommandPrefix) config.prefix = savedCommandPrefix;
 
 
 const mediaRotationTimers = { avatar: null, banner: null };
@@ -1324,13 +1331,14 @@ function helpEmbed(command, page = 1) {
       { name: 'status', value: commandList('>status', '>antinuke status') },
       { name: 'media', value: commandList('>next pfp', '>next banner') },
       { name: 'access control', value: commandList('>whitelist ...', '>admin ...') },
+      { name: 'command prefix', value: commandList('>prefix x', '>prefix reset') },
     );
   }
 
   return embed.addFields(
     { name: 'backups', value: commandList('>backup create', '>backup list', '>backup inspect <file>') },
     { name: 'utilities', value: commandList('>ping', '>serverinfo', '>userinfo', '>channelinfo', '>roleinfo', '>purge', '>slowmode', '>lockdown') },
-    { name: 'configuration', value: commandList('>config show', '>config threshold <type> <number>', '>config window <seconds>', '>config backup on|off', '>config dry-run on|off') },
+    { name: 'configuration', value: commandList('>config show', '>config threshold <type> <number>', '>config window <seconds>', '>config backup on|off', '>config dry-run on|off', '>prefix x', '>prefix reset') },
     { name: 'detailed help', value: commandList('>help whitelist', '>help backup', '>help admin', '>help audit', '>help config', '>help utility') },
   );
 }function statusEmbed(guild) {
@@ -2078,6 +2086,23 @@ client.on('messageCreate', async (message) => {
 
   if (command === 'autodelete') {
     await handleGuildAutoDeleteCommand(message, args);
+  } else if (command === 'prefix') {
+    if (!isGuildOwner(message)) {
+      await sendCommandResponse(message, 'Only the server owner can change the command prefix.');
+      return;
+    }
+    const requestedPrefix = args.shift();
+    const nextPrefix = requestedPrefix?.toLowerCase() === 'reset'
+      ? '>'
+      : normalizeCommandPrefix(requestedPrefix);
+    if (!nextPrefix || args.length) {
+      await sendCommandResponse(message, 'Use ' + config.prefix + 'prefix <new-prefix>, or ' + config.prefix + 'prefix reset.');
+      return;
+    }
+    config.prefix = nextPrefix;
+    settings.__commandPrefix = nextPrefix;
+    saveSettings();
+    await sendCommandResponse(message, 'Command prefix changed to ' + nextPrefix + '. Use ' + nextPrefix + 'help to see every command.');
   } else if (command === 'x') {
     await handleMaigretCommand(message, args);
   } else if (command === 'next') {

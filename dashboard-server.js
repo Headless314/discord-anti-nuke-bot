@@ -180,13 +180,10 @@ function startCloudflareQuickTunnel(dashboardPort, dashboardToken, onUrl, onFail
   tunnel.once('exit', (code, signal) => {
     if (!tunnelUrl && code !== 0) {
       console.warn('Cloudflare Quick Tunnel exited before providing a public URL (' + (signal || 'code ' + code) + ').');
-      reportFailure();
     } else if (tunnelUrl) {
       console.warn('Cloudflare Quick Tunnel stopped; the dashboard link is no longer available.');
     }
-  });
-  process.once('exit', () => {
-    if (!tunnel.killed) tunnel.kill('SIGTERM');
+    reportFailure();
   });
   return tunnel;
 }
@@ -746,24 +743,39 @@ function startDashboardServer(deps) {
   dashboardServer.listen(dashboardPort, '0.0.0.0', () => {
     if (isCloudflareTunnelEnabled()) {
       console.log('Starting Cloudflare Quick Tunnel for the owner dashboard...');
-      startCloudflareQuickTunnel(
-        dashboardPort,
-        dashboardToken,
-        (tunnelUrl) => {
-          // Print the link immediately so a host with restricted DNS does not
-          // hide a usable tunnel while the optional self-check is running.
-          console.log('Owner dashboard (Cloudflare): ' + tunnelUrl);
-          waitForPublicDashboard(tunnelUrl).then((reachable) => {
-            if (!reachable) {
-              console.warn('Cloudflare created a URL, but the dashboard did not respond after 30 seconds.');
-              console.warn('The host may be blocking Cloudflare tunnels or cloudflared may not be forwarding to the local port.');
-            }
-          }).catch(() => {});
-        },
-        () => {
-          console.warn('No Cloudflare dashboard link is available. Check that cloudflared is installed and allowed to make outbound connections.');
-        },
-      );
+      let activeTunnel = null;
+      let shuttingDown = false;
+      let restartTimer = null;
+      const launchTunnel = () => {
+        if (shuttingDown) return;
+        activeTunnel = startCloudflareQuickTunnel(
+          dashboardPort,
+          dashboardToken,
+          (tunnelUrl) => {
+            // Print the link immediately so a host with restricted DNS does not
+            // hide a usable tunnel while the optional self-check is running.
+            console.log('Owner dashboard (Cloudflare): ' + tunnelUrl);
+            waitForPublicDashboard(tunnelUrl).then((reachable) => {
+              if (!reachable) {
+                console.warn('Cloudflare created a URL, but the dashboard did not respond after 30 seconds.');
+                console.warn('The host may be blocking Cloudflare tunnels or cloudflared may not be forwarding to the local port.');
+              }
+            }).catch(() => {});
+          },
+          () => {
+            if (shuttingDown) return;
+            console.warn('No Cloudflare dashboard link is available. Retrying the tunnel in 5 seconds...');
+            clearTimeout(restartTimer);
+            restartTimer = setTimeout(launchTunnel, 5000);
+          },
+        );
+      };
+      process.once('exit', () => {
+        shuttingDown = true;
+        clearTimeout(restartTimer);
+        if (activeTunnel && !activeTunnel.killed) activeTunnel.kill('SIGTERM');
+      });
+      launchTunnel();
     } else {
       console.log('Owner dashboard: ' + configuredDashboardUrl);
     }

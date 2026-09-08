@@ -78,6 +78,7 @@ Whitelists, alert settings, enable state, server configuration, and the global b
 - `>help backup` - Show backup syntax.
 - `>help admin` - Show administrator alert syntax.
 - `>help utility` - Show utility and moderation command syntax.
+- `>prefix x` - Change the command prefix to `x` as the server owner; use the new prefix for all future commands. `>prefix reset` restores `>`.
 - `>status` - Show current server protection status.
 - `>antinuke status` - Show current server protection status.
 - `>antinuke enable` - Enable automatic mitigation.
@@ -162,7 +163,7 @@ Backups include guild metadata, roles, role permissions, channels, categories, p
 
 ## Configuration
 
-- `COMMAND_PREFIX`: defaults to `>`. Command parsing and generated help/error messages use this value, so changing it updates the bot's command list everywhere.
+- `COMMAND_PREFIX`: startup default is `>`. The server owner can change it at runtime with `>prefix x`; command parsing and generated help/error messages use the new value everywhere, including whitelist help.
 - `NUKE_WINDOW_MS`: counting window in milliseconds; defaults to `30000`.
 - `AUTO_BACKUP_ON_RISK`: create a structure backup before mitigation; defaults to `true`.
 - `CHANNEL_DELETE_THRESHOLD`, `CHANNEL_CREATE_THRESHOLD`, `ROLE_DELETE_THRESHOLD`, `ROLE_CREATE_THRESHOLD`, `BAN_THRESHOLD`: per-action thresholds.
@@ -188,7 +189,7 @@ The dashboard server listens on `0.0.0.0` so hosting providers can route traffic
 GitHub Pages is not suitable for this dashboard because it only hosts static files; the dashboard also needs the private Node.js API running alongside the bot. The project now includes the `cloudflared` package, which downloads the matching Cloudflare executable during the first tunnel start. Set `CLOUDFLARE_TUNNEL=on` (the default) and restart the bot. The bot will start a Cloudflare Quick Tunnel to its local dashboard port and print a link like:
 
 ```text
-Owner dashboard (Cloudflare): https://example.trycloudflare.com/dashboard/?access=...
+Owner dashboard (Cloudflare): https://example.trycloudflare.com/dashboard/
 ```
 
 The dashboard still requires `DASHBOARD_PASSWORD`. Quick Tunnel URLs are temporary and should be treated as private even though the password is required; do not post the printed link publicly. Use the exact hostname printed by the bot; it ends in `trycloudflare.com` (not `tryclodflare.com`), and an old link can stop resolving after a restart. If the host blocks executable downloads or outbound Cloudflare connections, Quick Tunnel cannot work there; in that case use `DASHBOARD_PUBLIC_URL` or `DASHBOARD_PUBLIC_HOST` instead.
