@@ -170,10 +170,15 @@ Backups include guild metadata, roles, role permissions, channels, categories, p
 - `LOG_CHANNEL_ID`: optional fallback log channel for servers that have not run `>setup`.
 - `OWNER_USER_ID`: optional Discord user ID that receives DM logs and owns whitelist changes; if blank, each server owner is used.
 - `DASHBOARD_PORT`: port for the owner dashboard; defaults to `3000` when `PORT` is not set.
-- `DASHBOARD_TOKEN`: optional stable private dashboard token; if blank, a fresh token is generated on each start.
+- `DASHBOARD_TOKEN`: private first-factor token; if blank, a fresh token is generated on each start.
+- `DASHBOARD_PASSWORD`: required second-factor password for the dashboard; keep it in the host's environment variables and use at least 12 characters.
+
+Dashboard security uses the private access token, the password, HttpOnly/SameSite session cookies, timing-safe password comparison, five-attempt login throttling, same-origin checks for writes, and security response headers.
 - `DASHBOARD_PUBLIC_URL`: public URL for the dashboard, such as `https://panel.example.com/dashboard/`; the access token is added automatically.
 - `DASHBOARD_PUBLIC_HOST`: public hostname or IP when the host exposes the dashboard port directly; the bot formats it as `http://host:<port>/dashboard/`. Bot Hosting users must expose `DASHBOARD_PORT` in the panel.
 
 The dashboard server listens on `0.0.0.0` so hosting providers can route traffic to it. A localhost URL is only usable from the machine running the bot; configure one of the public URL/host variables for remote access.
+
+Whitelist entries and dashboard settings are saved immediately to `data/settings.json` using an atomic file replacement, so they survive normal restarts. Make sure the hosting provider keeps the `data/` directory on persistent storage when redeploying.
 
 Keep `.env` and `data/settings.json` private.

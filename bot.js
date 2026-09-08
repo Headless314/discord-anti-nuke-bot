@@ -645,7 +645,15 @@ function getWindowMs(guildId) {
 
 function saveSettings() {
   fs.mkdirSync(dataDirectory, { recursive: true });
-  fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n', { mode: 0o600 });
+  const temporaryFile = settingsFile + '.tmp-' + process.pid;
+  const serialized = JSON.stringify(settings, null, 2) + '\n';
+  try {
+    fs.writeFileSync(temporaryFile, serialized, { mode: 0o600 });
+    fs.renameSync(temporaryFile, settingsFile);
+  } catch (error) {
+    try { fs.unlinkSync(temporaryFile); } catch {}
+    throw error;
+  }
 }
 
 function getLogChannelId(guildId) {
