@@ -24,7 +24,7 @@ A Discord.js anti-nuke bot that watches destructive server actions, attributes t
 - Owner-only DM security logs for moderation events and deleted message media
 - Runtime activity state restored after clean restarts
 - Red two-page command-center help with button navigation
-- Interactive administrator dashboard for thresholds, time windows, protection state, and bot status
+- Owner-only web dashboard for thresholds, time windows, protection state, recent activity, and backups
 
 The default command prefix is `>`.
 
@@ -64,13 +64,14 @@ The bot cannot remove a role above its highest role. It cannot undo already-dele
 7. Run `>setup` in the channel where security alerts should be posted.
 8. Add alert recipients with `>admin add <discord-user-id>`.
 
+When the bot connects, it prints a private owner dashboard link to the console. Open that link to manage protection state, dry-run mode, lockdown, thresholds, activity windows, risk backups, and recent security activity. The old Discord dashboard command was removed; the existing embeds and other moderation commands are unchanged.
+
 Whitelists, alert settings, enable state, server configuration, and the global bot status are saved in `data/settings.json`. Runtime activity counters are saved in `data/runtime.json` during shutdown and restored on startup. Automatic and manual backups are saved in `data/backups/`. These data paths are ignored by Git.
 
 ## Commands
 
 ### Protection
 
-- `>dashboard` - Open the administrator dashboard for thresholds, time windows, protection state, and bot status.
 - `>help` - Show the red two-page command-center help; press `🙏🏻` to open page two.
 - `>help whitelist` - Show whitelist syntax.
 - `>help backup` - Show backup syntax.
@@ -156,5 +157,8 @@ Backups include guild metadata, roles, role permissions, channels, categories, p
 - `TRUSTED_USER_IDS`: comma-separated IDs excluded from automatic action.
 - `LOG_CHANNEL_ID`: optional fallback log channel for servers that have not run `>setup`.
 - `OWNER_USER_ID`: optional Discord user ID that receives DM logs and owns whitelist changes; if blank, each server owner is used.
+- `DASHBOARD_PORT`: port for the owner dashboard; defaults to `3000` when `PORT` is not set.
+- `DASHBOARD_TOKEN`: optional stable private dashboard token; if blank, a fresh token is generated on each start.
+- `DASHBOARD_PUBLIC_URL`: optional public base URL to print instead of the local URL.
 
 Keep `.env` and `data/settings.json` private.

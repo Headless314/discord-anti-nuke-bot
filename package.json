@@ -5,7 +5,8 @@
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "dev": "nodemon bot.js"
+    "dev": "nodemon bot.js",
+    "dashboard:build": "echo 'Build the dashboard from the Replit Anti-Nuke Control Panel artifact, then copy its dist folder to dashboard/dist.'"
   },
   "keywords": [
     "discord",

@@ -8,17 +8,14 @@ const {
   Collection,
   EmbedBuilder: DiscordEmbedBuilder,
   GatewayIntentBits,
-  ModalBuilder,
   PermissionFlagsBits,
   Partials,
-  StringSelectMenuBuilder,
-  TextInputBuilder,
-  TextInputStyle,
 } = require('discord.js');
 const { spawn } = require('node:child_process');
 const dotenv = require('dotenv');
 const fs = require('node:fs');
 const path = require('node:path');
+const { startDashboardServer } = require('./dashboard-server');
 
 dotenv.config();
 
@@ -727,8 +724,22 @@ async function isWhitelisted(guild, executorId, target, type) {
 
 const activity = new Collection();
 const mitigations = new Collection();
+const dashboardActivity = [];
 const presenceStatuses = ['online', 'idle', 'dnd', 'invisible'];
 let botPresenceStatus = presenceStatuses.includes(settings.__botPresenceStatus) ? settings.__botPresenceStatus : 'online';
+
+function addDashboardActivity(guild, action, details, severity = 'notice') {
+  dashboardActivity.unshift({
+    id: Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+    guildId: guild.id,
+    guildName: guild.name,
+    action,
+    details,
+    severity,
+    createdAt: new Date().toISOString(),
+  });
+  if (dashboardActivity.length > 100) dashboardActivity.length = 100;
+}
 
 
 function saveRuntimeState() {
@@ -1041,6 +1052,7 @@ async function recordActivity({
   color = 0xff6600,
   ignoreUnknown = false,
 }) {
+  addDashboardActivity(guild, title, details, color === 0xff6600 ? 'warning' : 'notice');
   if (!getGuildSettings(guild.id).enabled) return;
 
   const executor = await findExecutor(guild, auditAction, target.id);
@@ -1174,7 +1186,7 @@ function helpEmbed(command, page = 1) {
   if (pageNumber === 1) {
     return embed.addFields(
       { name: 'protection', value: commandList('>antinuke status', '>antinuke enable', '>antinuke disable', '>antinuke dry-run on|off', '>antinuke reset', '>setup') },
-      { name: 'dashboard', value: commandList('>dashboard', '>status') },
+      { name: 'status', value: commandList('>status', '>antinuke status') },
       { name: 'media', value: commandList('>next pfp', '>next banner') },
       { name: 'access control', value: commandList('>whitelist ...', '>admin ...') },
     );
@@ -1408,50 +1420,6 @@ function configEmbed(guild) {
     );
 }
 
-function dashboardEmbed(guild) {
-  const guildSettings = getGuildSettings(guild.id);
-  return new EmbedBuilder()
-    .setTitle('Anti-Nuke Dashboard')
-    .addFields(
-      { name: 'Protection', value: guildSettings.enabled ? 'Enabled' : 'Disabled', inline: true },
-      { name: 'Dry run', value: guildSettings.dryRun ? 'Enabled' : 'Disabled', inline: true },
-      { name: 'Activity window', value: Math.round(guildSettings.windowMs / 1000) + ' seconds', inline: true },
-      { name: 'Channel create / mass create', value: String(getThreshold(guild.id, 'channel_create')), inline: true },
-      { name: 'Channel delete', value: String(getThreshold(guild.id, 'channel_delete')), inline: true },
-      { name: 'Role create / mass create', value: String(getThreshold(guild.id, 'role_create')), inline: true },
-      { name: 'Role delete', value: String(getThreshold(guild.id, 'role_delete')), inline: true },
-      { name: 'Kick', value: String(getThreshold(guild.id, 'kick')), inline: true },
-      { name: 'Ban', value: String(getThreshold(guild.id, 'ban')), inline: true },
-    );
-}
-
-const thresholdLabels = {
-  channel_create: 'Channel create / mass create',
-  channel_delete: 'Channel delete',
-  role_create: 'Role create / mass create',
-  role_delete: 'Role delete',
-  kick: 'Member kick',
-  ban: 'Member ban',
-};
-
-function dashboardComponents() {
-  return [
-    new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId('dashboard:threshold:type')
-        .setPlaceholder('Choose a threshold to configure')
-        .addOptions(
-          ...Object.entries(thresholdLabels).map(([value, label]) => ({ label, value })),
-        ),
-    ),
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('dashboard:window').setLabel('Set Time Window').setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId('dashboard:toggle').setLabel('Enable / Disable').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('dashboard:refresh').setLabel('Refresh').setStyle(ButtonStyle.Secondary),
-    ),
-  ];
-}
-
 function helpNavigation(page) {
   return [
     new ActionRowBuilder().addComponents(
@@ -1461,32 +1429,6 @@ function helpNavigation(page) {
   ];
 }
 
-function textInputRow(customId, label, placeholder, value) {
-  const input = new TextInputBuilder()
-    .setCustomId(customId)
-    .setLabel(label)
-    .setPlaceholder(placeholder)
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true);
-  if (value !== undefined) input.setValue(String(value));
-  return new ActionRowBuilder().addComponents(input);
-}
-
-function thresholdModal(guildId, type) {
-  return new ModalBuilder()
-    .setCustomId('dashboard:threshold:modal:' + type)
-    .setTitle('Set ' + thresholdLabels[type] + ' threshold')
-    .addComponents(
-      textInputRow('value', 'Actions allowed in the window', '1 to 100', getThreshold(guildId, type)),
-    );
-}
-
-function windowModal() {
-  return new ModalBuilder()
-    .setCustomId('dashboard:window:modal')
-    .setTitle('Configure activity window')
-    .addComponents(textInputRow('seconds', 'Window in seconds', '5 to 3600'));
-}
 
 function auditActionLabel(action) {
   const raw = String(action);
@@ -1794,6 +1736,19 @@ async function handleBackupCommand(message, args) {
 
 client.once('ready', async () => {
   console.log('Bot logged in as ' + client.user.tag);
+  startDashboardServer({
+    client,
+    config,
+    settings,
+    getGuildSettings,
+    saveSettings,
+    resetGuildState,
+    createServerBackup,
+    listServerBackups,
+    getBackupPath,
+    backupDirectory,
+    dashboardActivity,
+  });
   client.user.setPresence({ activities: [], status: botPresenceStatus });
   await startMediaRotation('avatar');
   await startMediaRotation('banner');
@@ -1922,90 +1877,14 @@ client.on('guildMemberRemove', async (member) => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
-    if (!interaction.inGuild()) return;
-
-    if (interaction.isStringSelectMenu() && interaction.customId === 'dashboard:threshold:type') {
-      if (!isAdministrator(interaction.member)) {
-        await interaction.reply({ content: 'Administrator permission required.', ephemeral: true });
-        return;
-      }
-      const type = interaction.values[0];
-      if (!thresholdLabels[type]) {
-        await interaction.reply({ content: 'That threshold is not available.', ephemeral: true });
-        return;
-      }
-      await interaction.showModal(thresholdModal(interaction.guild.id, type));
-      return;
-    }
-
-    if (interaction.isButton()) {
-      if (interaction.customId.startsWith('help:page:')) {
-        const page = interaction.customId.endsWith(':2') ? 2 : 1;
-        await interaction.update(plainCommandPayload({ embeds: [helpEmbed(null, page)], components: helpNavigation(page) }));
-        return;
-      }
-
-      if (!interaction.customId.startsWith('dashboard:')) return;
-      if (!isAdministrator(interaction.member)) {
-        await interaction.reply({ content: 'Administrator permission required.', ephemeral: true });
-        return;
-      }
-
-      if (interaction.customId === 'dashboard:window') {
-        await interaction.showModal(windowModal());
-        return;
-      }
-      if (interaction.customId === 'dashboard:toggle') {
-        const guildSettings = getGuildSettings(interaction.guild.id);
-        guildSettings.enabled = !guildSettings.enabled;
-        saveSettings();
-        await interaction.update(plainCommandPayload({ embeds: [dashboardEmbed(interaction.guild)], components: dashboardComponents() }));
-        return;
-      }
-      if (interaction.customId === 'dashboard:refresh') {
-        await interaction.update(plainCommandPayload({ embeds: [dashboardEmbed(interaction.guild)], components: dashboardComponents() }));
-      }
-      return;
-    }
-
-    if (!interaction.isModalSubmit()) return;
-    if (!interaction.customId.startsWith('dashboard:')) return;
-    if (!isAdministrator(interaction.member)) {
-      await interaction.reply({ content: 'Administrator permission required.', ephemeral: true });
-      return;
-    }
-
-    if (interaction.customId.startsWith('dashboard:threshold:modal:')) {
-      const type = interaction.customId.slice('dashboard:threshold:modal:'.length);
-      const value = Number.parseInt(interaction.fields.getTextInputValue('value').trim(), 10);
-      if (!thresholdLabels[type] || !Number.isInteger(value) || value < 1 || value > 100) {
-        await interaction.reply({ content: 'Choose a valid threshold value from 1 to 100.', ephemeral: true });
-        return;
-      }
-      const guildSettings = getGuildSettings(interaction.guild.id);
-      guildSettings.thresholds[type] = value;
-      saveSettings();
-      await interaction.reply({ content: thresholdLabels[type] + ' threshold updated to ' + value + '.', ephemeral: true });
-      return;
-    }
-
-    if (interaction.customId === 'dashboard:window:modal') {
-      const seconds = Number.parseInt(interaction.fields.getTextInputValue('seconds').trim(), 10);
-      if (!Number.isInteger(seconds) || seconds < 5 || seconds > 3600) {
-        await interaction.reply({ content: 'The activity window must be a whole number from 5 to 3600 seconds.', ephemeral: true });
-        return;
-      }
-      const guildSettings = getGuildSettings(interaction.guild.id);
-      guildSettings.windowMs = seconds * 1000;
-      saveSettings();
-      await interaction.reply({ content: 'Activity window updated to ' + seconds + ' seconds.', ephemeral: true });
-      return;
-    }
-
+    if (!interaction.inGuild() || !interaction.isButton()) return;
+    if (!interaction.customId.startsWith('help:page:')) return;
+    const page = interaction.customId.endsWith(':2') ? 2 : 1;
+    await interaction.update(plainCommandPayload({ embeds: [helpEmbed(null, page)], components: helpNavigation(page) }));
   } catch (error) {
     console.error('Interaction handling error:', error.message);
     if (interaction.deferred || interaction.replied) return;
-    await interaction.reply({ content: 'The dashboard action could not be completed.', ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: 'The help action could not be completed.', ephemeral: true }).catch(() => {});
   }
 });
 
@@ -2043,12 +1922,6 @@ client.on('messageCreate', async (message) => {
       embeds: [helpEmbed(section)],
       components: section ? [] : helpNavigation(1),
     });
-  } else if (command === 'dashboard' || command === 'panel') {
-    if (!isAdministrator(message.member)) {
-      await sendCommandResponse(message, 'Administrator permission required.');
-      return;
-    }
-    await sendCommandResponse(message, { embeds: [dashboardEmbed(message.guild)], components: dashboardComponents() });
   } else if (command === 'setup') {
     if (!isAdministrator(message.member)) {
       await sendCommandResponse(message, 'Administrator permission required.');
