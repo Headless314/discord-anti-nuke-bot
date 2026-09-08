@@ -468,6 +468,16 @@ function startDashboardServer(deps) {
     const url = new URL(request.url || '/', 'http://localhost');
     const apiPrefix = '/dashboard/api';
 
+    if (request.method === 'GET' && url.pathname === '/') {
+      response.writeHead(302, {
+        ...dashboardSecurityHeaders,
+        Location: '/dashboard/' + url.search,
+        'Cache-Control': 'no-store',
+      });
+      response.end();
+      return;
+    }
+
     if (url.pathname.startsWith(apiPrefix)) {
       const accessGranted = isAuthorized(request, dashboardToken, url);
       if (url.pathname === apiPrefix + '/login') {
