@@ -24,7 +24,8 @@ A Discord.js anti-nuke bot that watches destructive server actions, attributes t
 - Owner-only DM security logs for moderation events and deleted message media
 - Runtime activity state restored after clean restarts
 - Red two-page command-center help with button navigation
-- Owner-only web dashboard for thresholds, time windows, protection state, recent activity, and backups
+- Owner-only web dashboard for thresholds, time windows, protection state, recent activity, backups, whitelist management, and per-action punishments
+- Administrator DM alerts for configured risky activity, including dangerous permission roles being granted
 
 The default command prefix is `>`.
 
@@ -64,7 +65,7 @@ The bot cannot remove a role above its highest role. It cannot undo already-dele
 7. Run `>setup` in the channel where security alerts should be posted.
 8. Add alert recipients with `>admin add <discord-user-id>`.
 
-When the bot connects, it prints a private owner dashboard link to the console. Open that link to manage protection state, dry-run mode, lockdown, thresholds, activity windows, risk backups, and recent security activity. The old Discord dashboard command was removed; the existing embeds and other moderation commands are unchanged.
+When the bot connects, it prints a private owner dashboard link to the console. Open that link to manage protection state, dry-run mode, lockdown, thresholds, activity windows, risk backups, whitelist entries, and the response for each action. The old Discord dashboard command was removed; the existing embeds and other moderation commands are unchanged.
 
 Whitelists, alert settings, enable state, server configuration, and the global bot status are saved in `data/settings.json`. Runtime activity counters are saved in `data/runtime.json` during shutdown and restored on startup. Automatic and manual backups are saved in `data/backups/`. These data paths are ignored by Git.
 
@@ -125,6 +126,8 @@ IDs can be copied from Discord with Developer Mode enabled. Mentions such as `<@
 
 Risk alerts and security logs are sent by DM to `OWNER_USER_ID`, or to each server owner when that setting is blank. Deleted message logs include text plus image, video, audio, voice-message, and other attachment URLs. Bot-authored actions and bot-authored deleted messages are ignored.
 
+Configured `>admin add <id>` recipients receive threshold risk alerts and alerts when a role granting administrator, server management, channel management, role management, ban, or kick permissions is granted. The owner remains the default recipient.
+
 ### Backups
 
 - `>backup create` - Save a manual structure backup.
@@ -141,6 +144,15 @@ Risk alerts and security logs are sent by DM to `OWNER_USER_ID`, or to each serv
 - `>config window <seconds>` - Set the activity window from 5 to 3600 seconds.
 - `>config backup on|off` - Enable or disable automatic risk backups.
 - `>config dry-run on|off` - Enable or disable dry-run mode.
+
+The dashboard can choose `remove dangerous roles`, `kick`, `ban`, or `log only` independently for channel creates/deletes, role creates/deletes, kicks, and bans. The default remains dangerous-role removal.
+
+### Direct-message media
+
+- `>pfp` - Save attached images for rotating bot profile pictures.
+- `>banner` - Save attached images for rotating bot banners.
+- `>clear pfp` - Delete all saved profile-picture images.
+- `>clear banner` - Delete all saved banner images.
 
 Supported threshold types are `channel-delete`, `channel-create`, `role-delete`, `role-create`, `kick`, and `ban`. The dashboard also accepts `mass-create` as a shortcut for channel creation.
 

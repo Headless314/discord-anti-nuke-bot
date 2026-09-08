@@ -139,6 +139,28 @@ const whitelistNames = {
   users: 'users',
 };
 
+const punishmentNames = {
+  role_remove: 'role_remove',
+  'role-remove': 'role_remove',
+  remove_roles: 'role_remove',
+  remove: 'role_remove',
+  kick: 'kick',
+  ban: 'ban',
+  none: 'none',
+  log: 'none',
+};
+
+const defaultPunishments = {
+  channel_delete: 'role_remove',
+  channel_create: 'role_remove',
+  role_delete: 'role_remove',
+  role_create: 'role_remove',
+  kick: 'role_remove',
+  ban: 'role_remove',
+};
+
+const punishmentOptions = ['role_remove', 'kick', 'ban', 'none'];
+
 const thresholdNames = {
   channel_delete: 'channel_delete',
   'channel-delete': 'channel_delete',
@@ -389,6 +411,21 @@ async function advanceRotatingMedia(message, kind) {
   }
   await sendCommandResponse(message, kind + ' changed to the next image.');
 }
+
+async function clearRotatingMedia(kind) {
+  const rotation = getMediaRotation(kind);
+  for (const item of rotation.items) {
+    const filePath = getMediaPath(item);
+    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  }
+  if (mediaRotationTimers[kind]) clearInterval(mediaRotationTimers[kind]);
+  mediaRotationTimers[kind] = null;
+  mediaRotationErrors[kind] = null;
+  settings.__rotatingMedia = settings.__rotatingMedia || {};
+  settings.__rotatingMedia[kind] = { items: [], index: 0 };
+  saveSettings();
+}
+
 async function handleGuildAutoDeleteCommand(message, args) {
   if (!isGuildOwner(message)) {
     await sendCommandResponse(message, 'this command is server-owner only.');
@@ -538,13 +575,22 @@ async function handleDirectMessageCommand(message) {
     await saveRotatingMediaFromDm(message, 'avatar');
   } else if (command === 'banner') {
     await saveRotatingMediaFromDm(message, 'banner');
+  } else if (command === 'clear') {
+    const kind = args.shift()?.toLowerCase();
+    if (kind === 'pfp' || kind === 'avatar' || kind === 'banner') {
+      const mediaKind = kind === 'avatar' ? 'avatar' : kind;
+      await clearRotatingMedia(mediaKind);
+      await sendCommandResponse(message, 'deleted all saved ' + (mediaKind === 'avatar' ? 'pfp' : 'banner') + ' images. The current Discord image was not changed.');
+    } else {
+      await sendCommandResponse(message, 'use >clear pfp or >clear banner.');
+    }
   } else {
-    await sendCommandResponse(message, 'dm commands: >help, >pfp, >banner, >status, or >autodelete.');
+    await sendCommandResponse(message, 'dm commands: >help, >pfp, >banner, >clear pfp, >clear banner, >status, or >autodelete.');
   }
 }
 function dmHelpEmbed() {
   const tick = String.fromCharCode(96).repeat(3);
-  return new EmbedBuilder().setDescription(tick + 'diff\n- >pfp\n- >banner\n- >status <online|idle|dnd|invisible>\n- >autodelete on|off|status\n' + tick);
+  return new EmbedBuilder().setDescription(tick + 'diff\n- >pfp\n- >banner\n- >clear pfp\n- >clear banner\n- >status <online|idle|dnd|invisible>\n- >autodelete on|off|status\n' + tick);
 }
 function getGuildSettings(guildId) {
   const guildSettings = settings[guildId] || {};
@@ -565,6 +611,13 @@ function getGuildSettings(guildId) {
     ) {
       guildSettings.thresholds[type] = config.thresholds[type];
     }
+  }
+  guildSettings.punishments = guildSettings.punishments || {};
+  for (const type of Object.keys(config.thresholds)) {
+    const normalizedPunishment = punishmentNames[guildSettings.punishments[type]];
+    guildSettings.punishments[type] = punishmentOptions.includes(normalizedPunishment)
+      ? normalizedPunishment
+      : defaultPunishments[type];
   }
   guildSettings.logChannelId = guildSettings.logChannelId || null;
   guildSettings.alertAdminIds = Array.isArray(guildSettings.alertAdminIds)
@@ -649,6 +702,27 @@ async function sendOwnerMessage(guild, content) {
       .catch((error) => console.error('Could not DM the server owner:', error.message));
   }
   return true;
+}
+
+async function sendAdministratorMessage(guild, content) {
+  const guildSettings = getGuildSettings(guild.id);
+  const recipientIds = [...new Set([
+    getOwnerUserId(guild),
+    ...guildSettings.alertAdminIds,
+  ].filter(Boolean))].slice(0, 11);
+  let sent = 0;
+
+  for (const userId of recipientIds) {
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (!member || (member.id !== guild.ownerId && !isAdministrator(member))) continue;
+    for (const chunk of splitLogMessage(content)) {
+      await member
+        .send({ content: chunk, allowedMentions: { parse: [] } })
+        .then(() => { sent += 1; })
+        .catch((error) => console.error('Could not DM administrator ' + userId + ':', error.message));
+    }
+  }
+  return sent;
 }
 
 function isAdministrator(member) {
@@ -817,12 +891,65 @@ function resetGuildState(guildId) {
   }
 }
 
-async function handleSuspiciousUser(guild, userId, reason) {
+function dangerousRolePermissions(role) {
+  const permissions = [
+    [PermissionFlagsBits.Administrator, 'administrator'],
+    [PermissionFlagsBits.ManageGuild, 'manage server'],
+    [PermissionFlagsBits.ManageChannels, 'manage channels'],
+    [PermissionFlagsBits.ManageRoles, 'manage roles'],
+    [PermissionFlagsBits.BanMembers, 'ban members'],
+    [PermissionFlagsBits.KickMembers, 'kick members'],
+  ];
+  return permissions
+    .filter(([permission]) => role.permissions.has(permission))
+    .map(([, label]) => label);
+}
+
+function isDangerousRole(role, guild) {
+  return Boolean(
+    role &&
+    role.id !== guild.id &&
+    !role.managed &&
+    dangerousRolePermissions(role).length,
+  );
+}
+
+async function handleSuspiciousUser(guild, userId, reason, punishment = 'role_remove') {
   if (userId === guild.ownerId || userId === client.user.id) return;
 
   try {
     const member = await guild.members.fetch(userId).catch(() => null);
     if (!member) return;
+
+    if (punishment === 'none') {
+      await logAction(
+        guild,
+        'Suspicious user',
+        '<@' + userId + '> - ' + reason + '\nNo punishment was configured for this action.',
+        0xff9900,
+      );
+      return;
+    }
+
+    if (punishment === 'kick') {
+      if (!member.kickable) {
+        await logAction(guild, 'Suspicious user', '<@' + userId + '> - ' + reason + '\nThe member is not kickable by the bot.', 0xff9900);
+        return;
+      }
+      await member.kick('Anti-nuke: ' + reason);
+      await logAction(guild, 'Suspicious user', '<@' + userId + '> - ' + reason + '\nPunishment: kicked.', 0xff0000);
+      return;
+    }
+
+    if (punishment === 'ban') {
+      if (!member.bannable) {
+        await logAction(guild, 'Suspicious user', '<@' + userId + '> - ' + reason + '\nThe member is not bannable by the bot.', 0xff9900);
+        return;
+      }
+      await member.ban({ deleteMessageSeconds: 0, reason: 'Anti-nuke: ' + reason });
+      await logAction(guild, 'Suspicious user', '<@' + userId + '> - ' + reason + '\nPunishment: banned.', 0xff0000);
+      return;
+    }
 
     if (!member.manageable) {
       await logAction(
@@ -838,17 +965,7 @@ async function handleSuspiciousUser(guild, userId, reason) {
       return;
     }
 
-    const dangerousRoles = member.roles.cache.filter((role) => {
-      const isDangerous = [
-        PermissionFlagsBits.Administrator,
-        PermissionFlagsBits.ManageGuild,
-        PermissionFlagsBits.ManageChannels,
-        PermissionFlagsBits.ManageRoles,
-        PermissionFlagsBits.BanMembers,
-        PermissionFlagsBits.KickMembers,
-      ].some((permission) => role.permissions.has(permission));
-      return isDangerous && role.editable && role.id !== guild.id;
-    });
+    const dangerousRoles = member.roles.cache.filter((role) => isDangerousRole(role, guild) && role.editable);
 
     if (dangerousRoles.size === 0) {
       await logAction(
@@ -1000,7 +1117,7 @@ async function notifyAdmins(guild, reason, executorId, backupName) {
     console.error('Could not save risk alert state:', error.message);
   }
 
-  await sendOwnerMessage(
+  await sendAdministratorMessage(
     guild,
     '[ANTI-NUKE ALERT]\n' +
       'Reason: ' +
@@ -1105,7 +1222,12 @@ async function recordActivity({
       0xff9900,
     );
   } else {
-    await handleSuspiciousUser(guild, executor.id, reason);
+    await handleSuspiciousUser(
+      guild,
+      executor.id,
+      reason,
+      getGuildSettings(guild.id).punishments[type],
+    );
   }
   await notifyAdmins(guild, reason, executor.id, backup && backup.fileName);
 }
@@ -1873,6 +1995,40 @@ client.on('guildMemberRemove', async (member) => {
     reason: 'mass kicks',
     ignoreUnknown: true,
   });
+});
+
+client.on('guildMemberUpdate', async (oldMember, newMember) => {
+  if (!newMember.guild || !oldMember.roles?.cache || !newMember.roles?.cache) return;
+  const addedDangerousRoles = newMember.roles.cache.filter(
+    (role) => !oldMember.roles.cache.has(role.id) && isDangerousRole(role, newMember.guild),
+  );
+  if (!addedDangerousRoles.size) return;
+
+  const executor = await findExecutor(
+    newMember.guild,
+    AuditLogEvent.MemberRoleUpdate,
+    newMember.id,
+  );
+  if (executor?.bot) return;
+  if (executor && await isWhitelisted(newMember.guild, executor.id, null, 'role_update')) return;
+
+  const roleDetails = [...addedDangerousRoles.values()]
+    .map((role) => role.name + ' (' + dangerousRolePermissions(role).join(', ') + ')')
+    .join('; ');
+  const reason =
+    'Risky permission role granted to <@' +
+    newMember.id +
+    '>: ' +
+    roleDetails +
+    '.';
+  addDashboardActivity(newMember.guild, 'Risky permission role granted', reason, 'critical');
+  await logAction(
+    newMember.guild,
+    'Risky permission role granted',
+    reason + '\nBy: ' + (executor ? '<@' + executor.id + '>' : 'Unknown executor'),
+    0xff0000,
+  );
+  await notifyAdmins(newMember.guild, reason, executor?.id || 'Unknown', null);
 });
 
 client.on('interactionCreate', async (interaction) => {

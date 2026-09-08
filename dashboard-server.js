@@ -13,6 +13,10 @@ const thresholdKeys = [
   'ban',
 ];
 
+const whitelistKeys = ['users', 'roles', 'channels', 'categories'];
+const punishmentKeys = ['role_remove', 'kick', 'ban', 'none'];
+const snowflakePattern = /^\d{15,20}$/;
+
 let dashboardServer = null;
 
 function json(res, status, payload, headers = {}) {
@@ -65,6 +69,27 @@ function readBackup(backupPath, fileName, guildId, guildName) {
   }
 }
 
+function buildWhitelistOptions(guild) {
+  const users = [...guild.members.cache.values()]
+    .filter((member) => !member.user?.bot)
+    .map((member) => ({ id: member.id, label: member.user?.tag || member.displayName || member.id }))
+    .sort((left, right) => left.label.localeCompare(right.label))
+    .slice(0, 500);
+  const roles = [...guild.roles.cache.values()]
+    .filter((role) => role.id !== guild.id && !role.managed)
+    .map((role) => ({ id: role.id, label: '@' + role.name }))
+    .sort((left, right) => left.label.localeCompare(right.label));
+  const channels = [...guild.channels.cache.values()]
+    .filter((channel) => channel.type !== 4)
+    .map((channel) => ({ id: channel.id, label: '#' + channel.name }))
+    .sort((left, right) => left.label.localeCompare(right.label));
+  const categories = [...guild.channels.cache.values()]
+    .filter((channel) => channel.type === 4)
+    .map((channel) => ({ id: channel.id, label: channel.name }))
+    .sort((left, right) => left.label.localeCompare(right.label));
+  return { users, roles, channels, categories };
+}
+
 function buildState(deps) {
   const guilds = [...deps.client.guilds.cache.values()].map((guild) => {
     const settings = deps.getGuildSettings(guild.id);
@@ -83,6 +108,14 @@ function buildState(deps) {
           result[key] = settings.thresholds[key];
           return result;
         }, {}),
+        punishments: thresholdKeys.reduce((result, key) => {
+          result[key] = settings.punishments[key];
+          return result;
+        }, {}),
+        whitelist: whitelistKeys.reduce((result, key) => {
+          result[key] = [...settings.whitelist[key]];
+          return result;
+        }, {}),
         whitelistCounts: {
           users: settings.whitelist.users.length,
           roles: settings.whitelist.roles.length,
@@ -91,6 +124,7 @@ function buildState(deps) {
         },
         logChannelId: settings.logChannelId,
       },
+      whitelistOptions: buildWhitelistOptions(guild),
     };
   });
 
@@ -158,6 +192,16 @@ function updateSettings(deps, guildId, input) {
     }
   }
 
+  if (input.punishments && typeof input.punishments === 'object') {
+    for (const key of thresholdKeys) {
+      if (input.punishments[key] === undefined) continue;
+      if (!punishmentKeys.includes(input.punishments[key])) {
+        return { error: 'Punishments must be role removal, kick, ban, or log only.' };
+      }
+      settings.punishments[key] = input.punishments[key];
+    }
+  }
+
   let lockdownChanged = false;
   if (input.lockdown !== undefined && Boolean(input.lockdown) !== settings.lockdown) {
     settings.lockdown = Boolean(input.lockdown);
@@ -166,6 +210,25 @@ function updateSettings(deps, guildId, input) {
 
   deps.saveSettings();
   return { guild, settings, lockdownChanged };
+}
+
+function updateWhitelist(deps, guildId, type, entryId, operation) {
+  const guild = deps.client.guilds.cache.get(guildId);
+  if (!guild) return { error: 'Guild not found.' };
+  if (!whitelistKeys.includes(type)) return { error: 'Whitelist type must be user, role, channel, or category.' };
+  if (!snowflakePattern.test(String(entryId || ''))) return { error: 'Provide a valid Discord ID.' };
+
+  const list = deps.getGuildSettings(guildId).whitelist[type];
+  if (operation === 'add') {
+    if (!list.includes(entryId)) list.push(entryId);
+  } else if (operation === 'remove') {
+    const index = list.indexOf(entryId);
+    if (index !== -1) list.splice(index, 1);
+  } else {
+    return { error: 'Unsupported whitelist operation.' };
+  }
+  deps.saveSettings();
+  return { guild, values: [...list] };
 }
 
 function collectBody(request) {
@@ -253,6 +316,49 @@ function startDashboardServer(deps) {
       try {
         if (request.method === 'GET' && url.pathname === apiPrefix + '/state') {
           json(response, 200, buildState(deps));
+          return;
+        }
+
+        const whitelistMatch = url.pathname.match(/^\/dashboard\/api\/guilds\/(\d+)\/whitelist(?:\/([a-z]+)\/(\d+))?$/);
+        if (whitelistMatch) {
+          const guildId = whitelistMatch[1];
+          const guild = deps.client.guilds.cache.get(guildId);
+          if (!guild) {
+            json(response, 404, { error: 'Guild not found.' });
+            return;
+          }
+          if (request.method === 'GET' && !whitelistMatch[2]) {
+            const settings = deps.getGuildSettings(guildId);
+            json(response, 200, {
+              whitelist: whitelistKeys.reduce((result, key) => {
+                result[key] = [...settings.whitelist[key]];
+                return result;
+              }, {}),
+              options: buildWhitelistOptions(guild),
+            });
+            return;
+          }
+          if (request.method === 'POST' && !whitelistMatch[2]) {
+            const input = await collectBody(request);
+            const type = String(input.type || '');
+            const update = updateWhitelist(deps, guildId, type, String(input.id || ''), 'add');
+            if (update.error) {
+              json(response, 400, { error: update.error });
+              return;
+            }
+            json(response, 200, { whitelist: update.values });
+            return;
+          }
+          if (request.method === 'DELETE' && whitelistMatch[2]) {
+            const update = updateWhitelist(deps, guildId, whitelistMatch[2], whitelistMatch[3], 'remove');
+            if (update.error) {
+              json(response, 400, { error: update.error });
+              return;
+            }
+            json(response, 200, { whitelist: update.values });
+            return;
+          }
+          json(response, 405, { error: 'Method not allowed.' });
           return;
         }
 
