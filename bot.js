@@ -17,7 +17,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { startDashboardServer } = require('./dashboard-server');
 
-dotenv.config();
+const dotenvResult = dotenv.config({ path: path.join(__dirname, '.env') });
+if (dotenvResult.error && dotenvResult.error.code !== 'ENOENT') {
+  console.warn('Could not read the bot .env file: ' + dotenvResult.error.message);
+}
 
 const lowercaseEmbedText = (value) => typeof value === 'string' ? value.toLowerCase() : value;
 
@@ -361,11 +364,13 @@ async function saveRotatingMediaFromDm(message, kind) {
 
 function diffBlock(lines) {
   const tick = String.fromCharCode(96).repeat(3);
+  const ansiColors = ['32', '33', '35', '31']; // green, yellow, violet, red
   const withConfiguredPrefix = (line) => String(line).replace(/>(?=[a-z])/gi, config.prefix);
-  return tick + 'diff\n' + lines
+  return tick + 'ansi\n' + lines
     .filter(Boolean)
     .map(withConfiguredPrefix)
     .map((line) => line.startsWith('- ') ? line : '- ' + line)
+    .map((line, index) => '\u001b[1;' + ansiColors[index % ansiColors.length] + 'm' + line + '\u001b[0m')
     .join('\n') + '\n' + tick;
 }
 

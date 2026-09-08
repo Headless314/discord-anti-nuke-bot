@@ -65,7 +65,7 @@ The bot cannot remove a role above its highest role. It cannot undo already-dele
 7. Run `>setup` in the channel where security alerts should be posted.
 8. Add alert recipients with `>admin add <discord-user-id>`.
 
-When the bot connects, it prints a private owner dashboard link to the console. Open that link to manage protection state, dry-run mode, lockdown, thresholds, activity windows, risk backups, whitelist entries, and the response for each action. The old Discord dashboard command was removed; the existing embeds and other moderation commands are unchanged.
+When the bot connects, it prints a private owner dashboard link to the console. Open that link to manage protection state, dry-run mode, lockdown, thresholds, activity windows, risk backups, whitelist entries, and the response for each action. The old Discord dashboard command was removed. Command responses use Discord ANSI code blocks with rotating green, yellow, violet, and red lines where the client supports ANSI rendering.
 
 Whitelists, alert settings, enable state, server configuration, and the global bot status are saved in `data/settings.json`. Runtime activity counters are saved in `data/runtime.json` during shutdown and restored on startup. Automatic and manual backups are saved in `data/backups/`. These data paths are ignored by Git.
 
