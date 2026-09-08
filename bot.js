@@ -377,7 +377,10 @@ async function sendCommandResponse(message, payload) {
 }
 
 async function advanceRotatingMedia(message, kind) {
-  if (!config.ownerUserId || message.author.id !== config.ownerUserId) {
+  const allowed = message.guild
+    ? isGuildOwner(message)
+    : Boolean(config.ownerUserId && message.author.id === config.ownerUserId);
+  if (!allowed) {
     await sendCommandResponse(message, 'this command is owner-only.');
     return;
   }
@@ -408,6 +411,8 @@ async function handleDirectMessageCommand(message) {
     }
     botPresenceStatus = status;
     client.user.setPresence({ activities: [], status: botPresenceStatus });
+    settings.__botPresenceStatus = botPresenceStatus;
+    saveSettings();
     saveRuntimeState();
     await sendCommandResponse(message, 'bot status changed to ' + botPresenceStatus + '.');
     return;
@@ -603,7 +608,7 @@ async function isWhitelisted(guild, executorId, target, type) {
 const activity = new Collection();
 const mitigations = new Collection();
 const presenceStatuses = ['online', 'idle', 'dnd', 'invisible'];
-let botPresenceStatus = 'online';
+let botPresenceStatus = presenceStatuses.includes(settings.__botPresenceStatus) ? settings.__botPresenceStatus : 'online';
 
 
 function saveRuntimeState() {
@@ -632,7 +637,7 @@ function restoreRuntimeState() {
   try {
     const saved = JSON.parse(fs.readFileSync(runtimeFile, 'utf8'));
     if (!saved) return;
-    if (presenceStatuses.includes(saved.presenceStatus)) botPresenceStatus = saved.presenceStatus;
+    if (!settings.__botPresenceStatus && presenceStatuses.includes(saved.presenceStatus)) botPresenceStatus = saved.presenceStatus;
     if (!Array.isArray(saved.activity)) return;
     const now = Date.now();
     for (const record of saved.activity) {
