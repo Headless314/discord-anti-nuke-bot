@@ -393,10 +393,32 @@ async function advanceRotatingMedia(message, kind) {
 }
 async function handleDirectMessageCommand(message) {
   if (!config.ownerUserId || message.author.id !== config.ownerUserId) return;
-  const commandText = message.content.slice(config.prefix.length).trim();
-  if (!commandText) return;
+  const hasPrefix = message.content.startsWith(config.prefix);
+  const commandText = hasPrefix ? message.content.slice(config.prefix.length).trim() : '';
+  if (!commandText) {
+    if (settings.__dmAutoDelete === true) void message.delete().catch(() => {});
+    return;
+  }
   const args = commandText.split(/ +/);
   const command = args.shift().toLowerCase();
+
+  if (command === 'autodelete' || command === 'dmdelete' || command === 'cleanup') {
+    const action = args.shift()?.toLowerCase();
+    if (['on', 'enable', 'enabled'].includes(action)) {
+      settings.__dmAutoDelete = true;
+      saveSettings();
+      await sendCommandResponse(message, 'dm auto-delete enabled.');
+    } else if (['off', 'disable', 'disabled'].includes(action)) {
+      settings.__dmAutoDelete = false;
+      saveSettings();
+      await sendCommandResponse(message, 'dm auto-delete disabled.');
+    } else if (action === 'status' || !action) {
+      await sendCommandResponse(message, 'dm auto-delete is ' + (settings.__dmAutoDelete === true ? 'on' : 'off') + '.');
+    } else {
+      await sendCommandResponse(message, 'use >autodelete on, >autodelete off, or >autodelete status.');
+    }
+    return;
+  }
 
   if (command === 'help' || command === 'dmhelp') {
     await sendCommandResponse(message, { embeds: [dmHelpEmbed()] });
@@ -423,14 +445,14 @@ async function handleDirectMessageCommand(message) {
   } else if (command === 'banner') {
     await saveRotatingMediaFromDm(message, 'banner');
   } else {
-    await sendCommandResponse(message, 'dm commands: >help, >pfp, >banner, or >status.');
+    await sendCommandResponse(message, 'dm commands: >help, >pfp, >banner, >status, or >autodelete.');
   }
 }
-
 function dmHelpEmbed() {
   const tick = String.fromCharCode(96).repeat(3);
-  return new EmbedBuilder().setDescription(tick + 'diff\n- >pfp\n- >banner\n- >status <online|idle|dnd|invisible>\n' + tick);
-}function getGuildSettings(guildId) {
+  return new EmbedBuilder().setDescription(tick + 'diff\n- >pfp\n- >banner\n- >status <online|idle|dnd|invisible>\n- >autodelete on|off|status\n' + tick);
+}
+function getGuildSettings(guildId) {
   const guildSettings = settings[guildId] || {};
   guildSettings.enabled = guildSettings.enabled !== false;
   guildSettings.dryRun = guildSettings.dryRun === true;
@@ -1890,7 +1912,7 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.on('messageCreate', async (message) => {
-  if (message.author.bot || !message.content.startsWith(config.prefix)) return;
+  if (message.author.bot) return;
   if (!message.guild) {
       await handleDirectMessageCommand(message);
     return;
