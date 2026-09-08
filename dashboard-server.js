@@ -131,7 +131,11 @@ async function waitForPublicDashboard(url) {
 
 function resolveCloudflaredCommand() {
   const configuredCommand = String(process.env.CLOUDFLARED_BIN || '').trim();
-  if (configuredCommand) return { command: configuredCommand, args: [] };
+  // "cloudflared" is the example value commonly copied into .env. If it is
+  // not installed on PATH, continue to the package/npx fallback below.
+  if (configuredCommand && !/^cloudflared(?:\.exe)?$/i.test(configuredCommand)) {
+    return { command: configuredCommand, args: [] };
+  }
   try {
     return {
       command: path.join(path.dirname(require.resolve('cloudflared')), 'cloudflared.js'),
