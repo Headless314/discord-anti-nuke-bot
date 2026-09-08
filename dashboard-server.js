@@ -395,6 +395,12 @@ function buildDashboardUrl(baseUrl, dashboardToken, dashboardPort) {
   try {
     const url = new URL(candidate);
     if (!['http:', 'https:'].includes(url.protocol) || !url.hostname) return null;
+    // This is Bot Hosting's control-panel URL, not the public URL that
+    // forwards requests to the dashboard process. Appending /dashboard to it
+    // always produces a 404, so do not advertise it as a dashboard URL.
+    if (url.hostname === 'bot-hosting.net' && /^\/a\/d(?:\/|$)/i.test(url.pathname)) {
+      return null;
+    }
 
     const pathname = url.pathname.replace(/\/+$/, '');
     if (!pathname || pathname === '/') {
@@ -440,8 +446,7 @@ function startDashboardServer(deps) {
   const dashboardToken = process.env.DASHBOARD_TOKEN || crypto.randomBytes(24).toString('hex');
   const dashboardPort = safeNumber(process.env.SERVER_PORT || process.env.DASHBOARD_PORT || process.env.PORT || 3000, 1, 65535) || 3000;
   const dashboardRoot = path.join(__dirname, 'dashboard', 'dist');
-  const defaultBotHostingUrl = 'https://a19nivomrr.apps.bot-hosting.cloud';
-  const configuredUrl = process.env.DASHBOARD_PUBLIC_URL || process.env.PUBLIC_URL || process.env.EXTERNAL_URL || process.env.BOT_HOSTING_PUBLIC_URL || defaultBotHostingUrl;
+  const configuredUrl = process.env.DASHBOARD_PUBLIC_URL || process.env.PUBLIC_URL || process.env.EXTERNAL_URL || process.env.BOT_HOSTING_PUBLIC_URL || '';
   const configuredHost = process.env.DASHBOARD_PUBLIC_HOST || process.env.PUBLIC_HOST || process.env.EXTERNAL_HOST || process.env.BOT_HOSTING_PUBLIC_HOST || process.env.BOT_HOSTING_PUBLIC_IP || process.env.BOT_HOSTING_IP || process.env.SERVER_IP;
   const publicUrl = buildDashboardUrl(configuredUrl, dashboardToken, dashboardPort)
     || buildDashboardHostUrl(configuredHost, dashboardToken, dashboardPort)
@@ -649,7 +654,7 @@ function startDashboardServer(deps) {
   dashboardServer.listen(dashboardPort, '0.0.0.0', () => {
     console.log('Owner dashboard: ' + publicUrl);
     if (!hasRemoteUrl) {
-      console.warn('Dashboard is reachable only locally until DASHBOARD_PUBLIC_URL or DASHBOARD_PUBLIC_HOST is configured and port ' + dashboardPort + ' is exposed by the host.');
+      console.warn('Dashboard is reachable only locally until DASHBOARD_PUBLIC_URL or DASHBOARD_PUBLIC_HOST is configured with the public app URL and port ' + dashboardPort + ' is exposed by the host.');
     }
   });
   return dashboardServer;

@@ -175,10 +175,10 @@ Backups include guild metadata, roles, role permissions, channels, categories, p
 - `DASHBOARD_PASSWORD`: required second-factor password for the dashboard; keep it in the host's environment variables and use at least 12 characters.
 
 Dashboard security uses the private access token, the password, HttpOnly/SameSite session cookies, timing-safe password comparison, five-attempt login throttling, same-origin checks for writes, and security response headers.
-- `DASHBOARD_PUBLIC_URL`: optional public URL override; this deployment defaults to `https://a19nivomrr.apps.bot-hosting.cloud`, and the access token is added automatically.
+- `DASHBOARD_PUBLIC_URL`: optional public URL override for the public app endpoint; the access token is added automatically. On Bot Hosting, use the public app URL (for example, `https://your-public-app.apps.bot-hosting.cloud`), not the control-panel URL such as `https://bot-hosting.net/a/d/<id>`.
 - `DASHBOARD_PUBLIC_HOST`: public hostname or IP when the host exposes the dashboard port directly; the bot formats it as `http://host:<port>/dashboard/`. Bot Hosting users must expose `DASHBOARD_PORT` in the panel.
 
-The dashboard server listens on `0.0.0.0` so hosting providers can route traffic to it. A localhost URL is only usable from the machine running the bot; configure one of the public URL/host variables for remote access.
+The dashboard server listens on `0.0.0.0` so hosting providers can route traffic to it. A localhost URL is only usable from the machine running the bot; configure one of the public URL/host variables for remote access. The Bot Hosting control-panel URL is not an app endpoint and will return 404 for dashboard assets.
 
 Whitelist entries and dashboard settings are saved immediately to `data/settings.json` using an atomic file replacement, so they survive normal restarts. Make sure the hosting provider keeps the `data/` directory on persistent storage when redeploying.
 
