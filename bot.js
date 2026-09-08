@@ -354,7 +354,12 @@ async function saveRotatingMediaFromDm(message, kind) {
 
 function diffBlock(lines) {
   const tick = String.fromCharCode(96).repeat(3);
-  return tick + 'diff\n' + lines.filter(Boolean).map((line) => line.startsWith('- ') ? line : '- ' + line).join('\n') + '\n' + tick;
+  const withConfiguredPrefix = (line) => String(line).replace(/>(?=[a-z])/gi, config.prefix);
+  return tick + 'diff\n' + lines
+    .filter(Boolean)
+    .map(withConfiguredPrefix)
+    .map((line) => line.startsWith('- ') ? line : '- ' + line)
+    .join('\n') + '\n' + tick;
 }
 
 function plainCommandPayload(payload) {

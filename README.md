@@ -162,7 +162,7 @@ Backups include guild metadata, roles, role permissions, channels, categories, p
 
 ## Configuration
 
-- `COMMAND_PREFIX`: defaults to `>`.
+- `COMMAND_PREFIX`: defaults to `>`. Command parsing and generated help/error messages use this value, so changing it updates the bot's command list everywhere.
 - `NUKE_WINDOW_MS`: counting window in milliseconds; defaults to `30000`.
 - `AUTO_BACKUP_ON_RISK`: create a structure backup before mitigation; defaults to `true`.
 - `CHANNEL_DELETE_THRESHOLD`, `CHANNEL_CREATE_THRESHOLD`, `ROLE_DELETE_THRESHOLD`, `ROLE_CREATE_THRESHOLD`, `BAN_THRESHOLD`: per-action thresholds.
@@ -191,7 +191,7 @@ GitHub Pages is not suitable for this dashboard because it only hosts static fil
 Owner dashboard (Cloudflare): https://example.trycloudflare.com/dashboard/?access=...
 ```
 
-The dashboard still requires `DASHBOARD_PASSWORD`. Quick Tunnel URLs are temporary and should be treated as private even though the password is required; do not post the printed link publicly. If the host blocks executable downloads or outbound Cloudflare connections, Quick Tunnel cannot work there; in that case use `DASHBOARD_PUBLIC_URL` or `DASHBOARD_PUBLIC_HOST` instead.
+The dashboard still requires `DASHBOARD_PASSWORD`. Quick Tunnel URLs are temporary and should be treated as private even though the password is required; do not post the printed link publicly. Use the exact hostname printed by the bot; it ends in `trycloudflare.com` (not `tryclodflare.com`), and an old link can stop resolving after a restart. If the host blocks executable downloads or outbound Cloudflare connections, Quick Tunnel cannot work there; in that case use `DASHBOARD_PUBLIC_URL` or `DASHBOARD_PUBLIC_HOST` instead.
 
 Whitelist entries and dashboard settings are saved immediately to `data/settings.json` using an atomic file replacement, so they survive normal restarts. Make sure the hosting provider keeps the `data/` directory on persistent storage when redeploying.
 
