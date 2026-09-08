@@ -2,6 +2,7 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 const { URL } = require('node:url');
 
 const thresholdKeys = [
@@ -99,6 +100,52 @@ function isSameOriginRequest(request) {
 function safeNumber(value, minimum, maximum) {
   const number = Number(value);
   return Number.isInteger(number) && number >= minimum && number <= maximum ? number : null;
+}
+
+function isCloudflareTunnelEnabled() {
+  return /^(1|true|yes|on)$/i.test(String(process.env.CLOUDFLARE_TUNNEL || '').trim());
+}
+
+function startCloudflareQuickTunnel(dashboardPort, dashboardToken, onUrl) {
+  const command = String(process.env.CLOUDFLARED_BIN || 'cloudflared').trim() || 'cloudflared';
+  const tunnel = spawn(command, [
+    'tunnel',
+    '--no-autoupdate',
+    '--url',
+    'http://127.0.0.1:' + dashboardPort,
+  ], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  let output = '';
+  let tunnelUrl = null;
+
+  const handleOutput = (chunk) => {
+    output = (output + String(chunk)).slice(-12000);
+    if (tunnelUrl) return;
+    const match = output.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
+    if (!match) return;
+    tunnelUrl = buildDashboardUrl(match[0], dashboardToken, dashboardPort);
+    if (tunnelUrl) onUrl(tunnelUrl);
+  };
+
+  tunnel.stdout.on('data', handleOutput);
+  tunnel.stderr.on('data', handleOutput);
+  tunnel.once('error', (error) => {
+    console.warn('Cloudflare Quick Tunnel could not start: ' + (error.message || error));
+    console.warn('Install cloudflared or set CLOUDFLARED_BIN to its executable path.');
+  });
+  tunnel.once('exit', (code, signal) => {
+    if (!tunnelUrl && code !== 0) {
+      console.warn('Cloudflare Quick Tunnel exited before providing a public URL (' + (signal || 'code ' + code) + ').');
+    } else if (tunnelUrl) {
+      console.warn('Cloudflare Quick Tunnel stopped; the dashboard link is no longer available.');
+    }
+  });
+  process.once('exit', () => {
+    if (!tunnel.killed) tunnel.kill('SIGTERM');
+  });
+  return tunnel;
 }
 
 function readBackup(backupPath, fileName, guildId, guildName) {
@@ -448,7 +495,7 @@ function startDashboardServer(deps) {
   const dashboardRoot = path.join(__dirname, 'dashboard', 'dist');
   const configuredUrl = process.env.DASHBOARD_PUBLIC_URL || process.env.PUBLIC_URL || process.env.EXTERNAL_URL || process.env.BOT_HOSTING_PUBLIC_URL || '';
   const configuredHost = process.env.DASHBOARD_PUBLIC_HOST || process.env.PUBLIC_HOST || process.env.EXTERNAL_HOST || process.env.BOT_HOSTING_PUBLIC_HOST || process.env.BOT_HOSTING_PUBLIC_IP || process.env.BOT_HOSTING_IP || process.env.SERVER_IP;
-  const publicUrl = buildDashboardUrl(configuredUrl, dashboardToken, dashboardPort)
+  const configuredDashboardUrl = buildDashboardUrl(configuredUrl, dashboardToken, dashboardPort)
     || buildDashboardHostUrl(configuredHost, dashboardToken, dashboardPort)
     || buildDashboardUrl('http://127.0.0.1:' + dashboardPort, dashboardToken, dashboardPort);
   const hasRemoteUrl = Boolean(buildDashboardUrl(configuredUrl, dashboardToken, dashboardPort) || buildDashboardHostUrl(configuredHost, dashboardToken, dashboardPort));
@@ -652,8 +699,15 @@ function startDashboardServer(deps) {
   });
 
   dashboardServer.listen(dashboardPort, '0.0.0.0', () => {
-    console.log('Owner dashboard: ' + publicUrl);
-    if (!hasRemoteUrl) {
+    if (isCloudflareTunnelEnabled()) {
+      console.log('Starting Cloudflare Quick Tunnel for the owner dashboard...');
+      startCloudflareQuickTunnel(dashboardPort, dashboardToken, (tunnelUrl) => {
+        console.log('Owner dashboard (Cloudflare): ' + tunnelUrl);
+      });
+    } else {
+      console.log('Owner dashboard: ' + configuredDashboardUrl);
+    }
+    if (!hasRemoteUrl && !isCloudflareTunnelEnabled()) {
       console.warn('Dashboard is reachable only locally until DASHBOARD_PUBLIC_URL or DASHBOARD_PUBLIC_HOST is configured with the public app URL and port ' + dashboardPort + ' is exposed by the host.');
     }
   });
