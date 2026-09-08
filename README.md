@@ -171,26 +171,27 @@ Backups include guild metadata, roles, role permissions, channels, categories, p
 - `OWNER_USER_ID`: optional Discord user ID that receives DM logs and owns whitelist changes; if blank, each server owner is used.
 - `SERVER_PORT`: port supplied by Bot Hosting; the dashboard uses it automatically when present.
 - `DASHBOARD_PORT`: fallback dashboard port for hosts that do not provide `SERVER_PORT` or `PORT`; defaults to `3000`.
-- `DASHBOARD_TOKEN`: private first-factor token; if blank, a fresh token is generated on each start.
-- `DASHBOARD_PASSWORD`: required second-factor password for the dashboard; keep it in the host's environment variables and use at least 12 characters.
+- `DASHBOARD_TOKEN`: optional private access token; if blank, a fresh token is generated on each start.
+- `DASHBOARD_REQUIRE_TOKEN`: set to `on` to require the private access token in addition to the password. It defaults to `off`, making the dashboard public at its HTTPS URL while still requiring `DASHBOARD_PASSWORD`.
+- `DASHBOARD_PASSWORD`: required password for the public dashboard; keep it in the host's environment variables and use at least 12 characters.
 
 Dashboard security uses the private access token, the password, HttpOnly/SameSite session cookies, timing-safe password comparison, five-attempt login throttling, same-origin checks for writes, and security response headers.
 - `DASHBOARD_PUBLIC_URL`: optional public URL override for the public app endpoint; the access token is added automatically. On Bot Hosting, use the public app URL (for example, `https://your-public-app.apps.bot-hosting.cloud`), not the control-panel URL such as `https://bot-hosting.net/a/d/<id>`.
 - `DASHBOARD_PUBLIC_HOST`: public hostname or IP when the host exposes the dashboard port directly; the bot formats it as `http://host:<port>/dashboard/`. Bot Hosting users must expose `DASHBOARD_PORT` in the panel.
-- `CLOUDFLARE_TUNNEL`: set to `on` to start a temporary Cloudflare Quick Tunnel automatically and print the HTTPS dashboard link in the console. This does not require a Cloudflare account, but the link changes when the bot restarts.
+- `CLOUDFLARE_TUNNEL`: starts a temporary Cloudflare Quick Tunnel automatically and prints the HTTPS dashboard link immediately, then checks reachability in the background. It is enabled by default; set it to `off` only to disable it. This does not require a Cloudflare account, but the link changes when the bot restarts.
 - `CLOUDFLARED_BIN`: optional path or command name for the `cloudflared` executable; defaults to `cloudflared`.
 
 The dashboard server listens on `0.0.0.0` so hosting providers can route traffic to it. A localhost URL is only usable from the machine running the bot; configure one of the public URL/host variables for remote access. The Bot Hosting control-panel URL is not an app endpoint and will return 404 for dashboard assets.
 
 ### Automatic HTTPS link with Cloudflare
 
-GitHub Pages is not suitable for this dashboard because it only hosts static files; the dashboard also needs the private Node.js API running alongside the bot. To avoid configuring a public URL or port manually, install `cloudflared` on the host, set `CLOUDFLARE_TUNNEL=on`, and restart the bot. The bot will start a Cloudflare Quick Tunnel to its local dashboard port and print a link like:
+GitHub Pages is not suitable for this dashboard because it only hosts static files; the dashboard also needs the private Node.js API running alongside the bot. The project now includes the `cloudflared` package, which downloads the matching Cloudflare executable during the first tunnel start. Set `CLOUDFLARE_TUNNEL=on` (the default) and restart the bot. The bot will start a Cloudflare Quick Tunnel to its local dashboard port and print a link like:
 
 ```text
 Owner dashboard (Cloudflare): https://example.trycloudflare.com/dashboard/?access=...
 ```
 
-The dashboard still requires `DASHBOARD_PASSWORD`. Quick Tunnel URLs are temporary and should be treated as private; do not post the printed link publicly. If the host does not have `cloudflared` installed, use `DASHBOARD_PUBLIC_URL` or `DASHBOARD_PUBLIC_HOST` instead.
+The dashboard still requires `DASHBOARD_PASSWORD`. Quick Tunnel URLs are temporary and should be treated as private even though the password is required; do not post the printed link publicly. If the host blocks executable downloads or outbound Cloudflare connections, Quick Tunnel cannot work there; in that case use `DASHBOARD_PUBLIC_URL` or `DASHBOARD_PUBLIC_HOST` instead.
 
 Whitelist entries and dashboard settings are saved immediately to `data/settings.json` using an atomic file replacement, so they survive normal restarts. Make sure the hosting provider keeps the `data/` directory on persistent storage when redeploying.
 

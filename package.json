@@ -18,6 +18,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "cloudflared": "^0.7.3",
     "discord.js": "^14.14.0",
     "dotenv": "^16.3.1"
   },
