@@ -169,7 +169,8 @@ Backups include guild metadata, roles, role permissions, channels, categories, p
 - `TRUSTED_USER_IDS`: comma-separated IDs excluded from automatic action.
 - `LOG_CHANNEL_ID`: optional fallback log channel for servers that have not run `>setup`.
 - `OWNER_USER_ID`: optional Discord user ID that receives DM logs and owns whitelist changes; if blank, each server owner is used.
-- `DASHBOARD_PORT`: port for the owner dashboard; defaults to `3000` when `PORT` is not set.
+- `SERVER_PORT`: port supplied by Bot Hosting; the dashboard uses it automatically when present.
+- `DASHBOARD_PORT`: fallback dashboard port for hosts that do not provide `SERVER_PORT` or `PORT`; defaults to `3000`.
 - `DASHBOARD_TOKEN`: private first-factor token; if blank, a fresh token is generated on each start.
 - `DASHBOARD_PASSWORD`: required second-factor password for the dashboard; keep it in the host's environment variables and use at least 12 characters.
 

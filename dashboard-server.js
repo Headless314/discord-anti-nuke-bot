@@ -438,7 +438,7 @@ function startDashboardServer(deps) {
     console.warn('DASHBOARD_PASSWORD should be at least 12 characters long.');
   }
   const dashboardToken = process.env.DASHBOARD_TOKEN || crypto.randomBytes(24).toString('hex');
-  const dashboardPort = safeNumber(process.env.DASHBOARD_PORT || process.env.PORT || 3000, 1, 65535) || 3000;
+  const dashboardPort = safeNumber(process.env.SERVER_PORT || process.env.DASHBOARD_PORT || process.env.PORT || 3000, 1, 65535) || 3000;
   const dashboardRoot = path.join(__dirname, 'dashboard', 'dist');
   const defaultBotHostingUrl = 'https://a19nivomrr.apps.bot-hosting.cloud';
   const configuredUrl = process.env.DASHBOARD_PUBLIC_URL || process.env.PUBLIC_URL || process.env.EXTERNAL_URL || process.env.BOT_HOSTING_PUBLIC_URL || defaultBotHostingUrl;
