@@ -292,16 +292,61 @@ function serveDashboardFile(request, response, dashboardRoot, dashboardToken) {
   response.end(fs.readFileSync(finalPath));
 }
 
+function buildDashboardUrl(baseUrl, dashboardToken, dashboardPort) {
+  const rawValue = String(baseUrl || '').trim();
+  if (!rawValue) return null;
+
+  const candidate = /^[a-z][a-z\d+.-]*:\/\//i.test(rawValue)
+    ? rawValue
+    : 'http://' + rawValue;
+
+  try {
+    const url = new URL(candidate);
+    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname) return null;
+
+    const pathname = url.pathname.replace(/\/+$/, '');
+    if (!pathname || pathname === '/') {
+      url.pathname = '/dashboard/';
+    } else if (pathname === '/dashboard') {
+      url.pathname = '/dashboard/';
+    }
+    url.searchParams.set('access', dashboardToken);
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function buildDashboardHostUrl(hostValue, dashboardToken, dashboardPort) {
+  const rawValue = String(hostValue || '').trim();
+  if (!rawValue) return null;
+  const candidate = /^[a-z][a-z\d+.-]*:\/\//i.test(rawValue)
+    ? rawValue
+    : 'http://' + rawValue;
+
+  try {
+    const url = new URL(candidate);
+    if (!url.hostname) return null;
+    if (!url.port) url.port = String(dashboardPort);
+    return buildDashboardUrl(url.toString(), dashboardToken, dashboardPort);
+  } catch {
+    return null;
+  }
+}
+
 function startDashboardServer(deps) {
   if (dashboardServer) return dashboardServer;
 
   const dashboardToken = process.env.DASHBOARD_TOKEN || crypto.randomBytes(24).toString('hex');
   const dashboardPort = safeNumber(process.env.DASHBOARD_PORT || process.env.PORT || 3000, 1, 65535) || 3000;
   const dashboardRoot = path.join(__dirname, 'dashboard', 'dist');
-  const configuredUrl = process.env.DASHBOARD_PUBLIC_URL;
-  const publicUrl = configuredUrl
-    ? configuredUrl + (configuredUrl.includes('?') ? '&' : '?') + 'access=' + encodeURIComponent(dashboardToken)
-    : 'http://localhost:' + dashboardPort + '/dashboard/?access=' + dashboardToken;
+  const configuredUrl = process.env.DASHBOARD_PUBLIC_URL || process.env.PUBLIC_URL || process.env.EXTERNAL_URL || process.env.BOT_HOSTING_PUBLIC_URL;
+  const configuredHost = process.env.DASHBOARD_PUBLIC_HOST || process.env.PUBLIC_HOST || process.env.EXTERNAL_HOST || process.env.BOT_HOSTING_PUBLIC_HOST || process.env.BOT_HOSTING_PUBLIC_IP || process.env.BOT_HOSTING_IP || process.env.SERVER_IP;
+  const publicUrl = buildDashboardUrl(configuredUrl, dashboardToken, dashboardPort)
+    || buildDashboardHostUrl(configuredHost, dashboardToken, dashboardPort)
+    || buildDashboardUrl('http://127.0.0.1:' + dashboardPort, dashboardToken, dashboardPort);
+  const hasRemoteUrl = Boolean(buildDashboardUrl(configuredUrl, dashboardToken, dashboardPort) || buildDashboardHostUrl(configuredHost, dashboardToken, dashboardPort));
 
   dashboardServer = http.createServer(async (request, response) => {
     const url = new URL(request.url || '/', 'http://localhost');
@@ -425,6 +470,9 @@ function startDashboardServer(deps) {
 
   dashboardServer.listen(dashboardPort, '0.0.0.0', () => {
     console.log('Owner dashboard: ' + publicUrl);
+    if (!hasRemoteUrl) {
+      console.warn('Dashboard is reachable only locally until DASHBOARD_PUBLIC_URL or DASHBOARD_PUBLIC_HOST is configured and port ' + dashboardPort + ' is exposed by the host.');
+    }
   });
   return dashboardServer;
 }
