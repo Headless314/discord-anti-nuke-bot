@@ -131,17 +131,23 @@ async function waitForPublicDashboard(url) {
 
 function resolveCloudflaredCommand() {
   const configuredCommand = String(process.env.CLOUDFLARED_BIN || '').trim();
-  if (configuredCommand) return configuredCommand;
+  if (configuredCommand) return { command: configuredCommand, args: [] };
   try {
-    return path.join(path.dirname(require.resolve('cloudflared')), 'cloudflared.js');
+    return {
+      command: path.join(path.dirname(require.resolve('cloudflared')), 'cloudflared.js'),
+      args: [],
+    };
   } catch {
-    return 'cloudflared';
+    // Bot Hosting may run `node bot.js` directly without adding
+    // node_modules/.bin to PATH. npx can install the wrapper on demand.
+    return { command: 'npx', args: ['--yes', 'cloudflared'] };
   }
 }
 
 function startCloudflareQuickTunnel(dashboardPort, dashboardToken, onUrl, onFailure) {
-  const command = resolveCloudflaredCommand();
-  const tunnel = spawn(command, [
+  const resolvedCommand = resolveCloudflaredCommand();
+  const tunnel = spawn(resolvedCommand.command, [
+    ...resolvedCommand.args,
     'tunnel',
     '--protocol',
     'http2',
@@ -155,10 +161,10 @@ function startCloudflareQuickTunnel(dashboardPort, dashboardToken, onUrl, onFail
   let output = '';
   let tunnelUrl = null;
   let failureReported = false;
-  const reportFailure = () => {
+  const reportFailure = (failure = {}) => {
     if (failureReported) return;
     failureReported = true;
-    onFailure();
+    onFailure(failure);
   };
 
   const handleOutput = (chunk) => {
@@ -173,9 +179,16 @@ function startCloudflareQuickTunnel(dashboardPort, dashboardToken, onUrl, onFail
   tunnel.stdout.on('data', handleOutput);
   tunnel.stderr.on('data', handleOutput);
   tunnel.once('error', (error) => {
+    const permanent = error.code === 'ENOENT';
     console.warn('Cloudflare Quick Tunnel could not start: ' + (error.message || error));
-    console.warn('Install cloudflared or set CLOUDFLARED_BIN to its executable path.');
-    reportFailure();
+    if (permanent) {
+      if (resolvedCommand.command === 'npx') {
+        console.warn('Neither cloudflared nor npx is available on this host. Install Node/npm or set CLOUDFLARED_BIN to an installed executable.');
+      } else {
+        console.warn('The configured cloudflared executable is unavailable. Install it or remove CLOUDFLARED_BIN so the bot can use npx automatically.');
+      }
+    }
+    reportFailure({ permanent });
   });
   tunnel.once('exit', (code, signal) => {
     if (!tunnelUrl && code !== 0) {
@@ -183,7 +196,7 @@ function startCloudflareQuickTunnel(dashboardPort, dashboardToken, onUrl, onFail
     } else if (tunnelUrl) {
       console.warn('Cloudflare Quick Tunnel stopped; the dashboard link is no longer available.');
     }
-    reportFailure();
+    reportFailure({ permanent: false });
   });
   return tunnel;
 }
@@ -746,12 +759,14 @@ function startDashboardServer(deps) {
       let activeTunnel = null;
       let shuttingDown = false;
       let restartTimer = null;
+      let restartAttempts = 0;
       const launchTunnel = () => {
         if (shuttingDown) return;
         activeTunnel = startCloudflareQuickTunnel(
           dashboardPort,
           dashboardToken,
           (tunnelUrl) => {
+            restartAttempts = 0;
             // Print the link immediately so a host with restricted DNS does not
             // hide a usable tunnel while the optional self-check is running.
             console.log('Owner dashboard (Cloudflare): ' + tunnelUrl);
@@ -762,9 +777,18 @@ function startDashboardServer(deps) {
               }
             }).catch(() => {});
           },
-          () => {
+          (failure = {}) => {
             if (shuttingDown) return;
-            console.warn('No Cloudflare dashboard link is available. Retrying the tunnel in 5 seconds...');
+            if (failure.permanent) {
+              console.warn('Cloudflare Quick Tunnel disabled for this run because its executable is unavailable. The bot will continue without a dashboard link.');
+              return;
+            }
+            if (restartAttempts >= 3) {
+              console.warn('Cloudflare Quick Tunnel stopped after 3 retries. Restart the bot to try again.');
+              return;
+            }
+            restartAttempts += 1;
+            console.warn('No Cloudflare dashboard link is available. Retrying the tunnel in 5 seconds (' + restartAttempts + '/3)...');
             clearTimeout(restartTimer);
             restartTimer = setTimeout(launchTunnel, 5000);
           },

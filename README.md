@@ -180,7 +180,7 @@ Dashboard security uses the private access token, the password, HttpOnly/SameSit
 - `DASHBOARD_PUBLIC_URL`: optional public URL override for the public app endpoint; the access token is added automatically. On Bot Hosting, use the public app URL (for example, `https://your-public-app.apps.bot-hosting.cloud`), not the control-panel URL such as `https://bot-hosting.net/a/d/<id>`.
 - `DASHBOARD_PUBLIC_HOST`: public hostname or IP when the host exposes the dashboard port directly; the bot formats it as `http://host:<port>/dashboard/`. Bot Hosting users must expose `DASHBOARD_PORT` in the panel.
 - `CLOUDFLARE_TUNNEL`: starts a temporary Cloudflare Quick Tunnel automatically and prints the HTTPS dashboard link immediately, then checks reachability in the background. It is enabled by default; set it to `off` only to disable it. This does not require a Cloudflare account, but the link changes when the bot restarts.
-- `CLOUDFLARED_BIN`: optional path or command name for the `cloudflared` executable; defaults to `cloudflared`.
+- `CLOUDFLARED_BIN`: optional path or command name for the `cloudflared` executable. If omitted, the bot uses the installed package and then falls back to `npx cloudflared`.
 
 The dashboard server listens on `0.0.0.0` so hosting providers can route traffic to it. A localhost URL is only usable from the machine running the bot; configure one of the public URL/host variables for remote access. The Bot Hosting control-panel URL is not an app endpoint and will return 404 for dashboard assets.
 
