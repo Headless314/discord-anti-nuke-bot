@@ -235,7 +235,10 @@ function startDashboardServer(deps) {
   const dashboardToken = process.env.DASHBOARD_TOKEN || crypto.randomBytes(24).toString('hex');
   const dashboardPort = safeNumber(process.env.DASHBOARD_PORT || process.env.PORT || 3000, 1, 65535) || 3000;
   const dashboardRoot = path.join(__dirname, 'dashboard', 'dist');
-  const publicUrl = process.env.DASHBOARD_PUBLIC_URL || 'http://localhost:' + dashboardPort + '/dashboard/?access=' + dashboardToken;
+  const configuredUrl = process.env.DASHBOARD_PUBLIC_URL;
+  const publicUrl = configuredUrl
+    ? configuredUrl + (configuredUrl.includes('?') ? '&' : '?') + 'access=' + encodeURIComponent(dashboardToken)
+    : 'http://localhost:' + dashboardPort + '/dashboard/?access=' + dashboardToken;
 
   dashboardServer = http.createServer(async (request, response) => {
     const url = new URL(request.url || '/', 'http://localhost');
