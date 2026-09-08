@@ -174,7 +174,7 @@ Backups include guild metadata, roles, role permissions, channels, categories, p
 - `DASHBOARD_PASSWORD`: required second-factor password for the dashboard; keep it in the host's environment variables and use at least 12 characters.
 
 Dashboard security uses the private access token, the password, HttpOnly/SameSite session cookies, timing-safe password comparison, five-attempt login throttling, same-origin checks for writes, and security response headers.
-- `DASHBOARD_PUBLIC_URL`: public URL for the dashboard, such as `https://panel.example.com/dashboard/`; the access token is added automatically.
+- `DASHBOARD_PUBLIC_URL`: optional public URL override; this deployment defaults to `https://a19nivomrr.apps.bot-hosting.cloud`, and the access token is added automatically.
 - `DASHBOARD_PUBLIC_HOST`: public hostname or IP when the host exposes the dashboard port directly; the bot formats it as `http://host:<port>/dashboard/`. Bot Hosting users must expose `DASHBOARD_PORT` in the panel.
 
 The dashboard server listens on `0.0.0.0` so hosting providers can route traffic to it. A localhost URL is only usable from the machine running the bot; configure one of the public URL/host variables for remote access.
