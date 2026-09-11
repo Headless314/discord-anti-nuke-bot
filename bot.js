@@ -2024,21 +2024,32 @@ async function handleBackupCommand(message, args) {
   await sendCommandResponse(message, 'Use ' + config.prefix + 'backup create [reason], ' + config.prefix + 'backup list [count], ' + config.prefix + 'backup latest, ' + config.prefix + 'backup inspect <file>, ' + config.prefix + 'backup diff <file>, ' + config.prefix + 'backup export <file>, or ' + config.prefix + 'backup delete <file>.');
 }
 
+const dashboardDependencies = {
+  client,
+  config,
+  settings,
+  getGuildSettings,
+  saveSettings,
+  resetGuildState,
+  createServerBackup,
+  listServerBackups,
+  getBackupPath,
+  backupDirectory,
+  dashboardActivity,
+};
+
+function startOwnerDashboard() {
+  try {
+    startDashboardServer(dashboardDependencies);
+  } catch (error) {
+    console.error('Could not start owner dashboard:', error.message);
+  }
+}
+
+startOwnerDashboard();
+
 client.once('ready', async () => {
   console.log('Bot logged in as ' + client.user.tag);
-  startDashboardServer({
-    client,
-    config,
-    settings,
-    getGuildSettings,
-    saveSettings,
-    resetGuildState,
-    createServerBackup,
-    listServerBackups,
-    getBackupPath,
-    backupDirectory,
-    dashboardActivity,
-  });
   client.user.setPresence({ activities: [], status: botPresenceStatus });
   await startMediaRotation('avatar');
   await startMediaRotation('banner');
