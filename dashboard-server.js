@@ -421,7 +421,7 @@ function sendDashboardLoginPage(request, response, url, dashboardToken) {
     '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard sign in</title>',
     '<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0e0c10;color:#f5f1f3;font:16px system-ui,sans-serif}main{width:min(420px,calc(100% - 40px));padding:32px;border:1px solid #3a333d;border-radius:16px;background:#17131a;box-shadow:0 18px 60px #0008}h1{margin:0 0 8px;font-size:24px}p{color:#bcb3c0;line-height:1.5}label{display:block;margin:24px 0 8px;font-weight:600}input{box-sizing:border-box;width:100%;padding:12px;border:1px solid #554b58;border-radius:8px;background:#0e0c10;color:#fff;font:inherit}button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;background:#8f7cff;color:#fff;font:600 16px system-ui;cursor:pointer}#message{min-height:24px;color:#ff9e9e}</style></head>',
     '<body><main><h1>Anti-Nuke Control Panel</h1><p>Enter the dashboard password to continue.</p><form><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required autofocus><button type="submit">Unlock dashboard</button><p id="message" role="alert"></p></form></main>',
-    '<script>const form=document.querySelector("form"),input=document.querySelector("#password"),message=document.querySelector("#message");form.addEventListener("submit",async event=>{event.preventDefault();message.textContent="Checking...";try{const response=await fetch("/dashboard/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:input.value})});const result=await response.json();if(response.ok){location.replace("/dashboard/");return}message.textContent=result.error||"Login failed."}catch{message.textContent="Could not reach the dashboard server."}});</script></body></html>',
+    '<script>const form=document.querySelector("form"),input=document.querySelector("#password"),message=document.querySelector("#message"),accessQuery=window.location.search;form.addEventListener("submit",async event=>{event.preventDefault();message.textContent="Checking...";try{const response=await fetch("/dashboard/api/login"+accessQuery,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:input.value})});const result=await response.json();if(response.ok){location.replace("/dashboard/"+accessQuery);return}message.textContent=result.error||"Login failed."}catch{message.textContent="Could not reach the dashboard server."}});</script></body></html>',
   ].join('');
   response.writeHead(200, headers);
   response.end(body);
@@ -550,9 +550,13 @@ function startDashboardServer(deps) {
     console.warn('DASHBOARD_PASSWORD should be at least 12 characters long.');
   }
   const dashboardToken = process.env.DASHBOARD_TOKEN || crypto.randomBytes(24).toString('hex');
-  const dashboardPort = safeNumber(process.env.SERVER_PORT || process.env.DASHBOARD_PORT || process.env.PORT || 3000, 1, 65535) || 3000;
+  const dashboardPort = safeNumber(process.env.PORT || process.env.SERVER_PORT || process.env.DASHBOARD_PORT || 3000, 1, 65535) || 3000;
   const dashboardRoot = path.join(__dirname, 'dashboard', 'dist');
-  const configuredUrl = process.env.DASHBOARD_PUBLIC_URL || process.env.PUBLIC_URL || process.env.EXTERNAL_URL || process.env.BOT_HOSTING_PUBLIC_URL || '';
+  const railwayPublicDomain = String(process.env.RAILWAY_PUBLIC_DOMAIN || '').trim();
+  const railwayPublicUrl = railwayPublicDomain
+    ? (/^https?:\/\//i.test(railwayPublicDomain) ? railwayPublicDomain : 'https://' + railwayPublicDomain)
+    : '';
+  const configuredUrl = process.env.DASHBOARD_PUBLIC_URL || process.env.PUBLIC_URL || process.env.EXTERNAL_URL || process.env.BOT_HOSTING_PUBLIC_URL || railwayPublicUrl || '';
   const configuredHost = process.env.DASHBOARD_PUBLIC_HOST || process.env.PUBLIC_HOST || process.env.EXTERNAL_HOST || process.env.BOT_HOSTING_PUBLIC_HOST || process.env.BOT_HOSTING_PUBLIC_IP || process.env.BOT_HOSTING_IP || process.env.SERVER_IP;
   const configuredDashboardUrl = buildDashboardUrl(configuredUrl, dashboardToken, dashboardPort)
     || buildDashboardHostUrl(configuredHost, dashboardToken, dashboardPort)
@@ -581,6 +585,16 @@ function startDashboardServer(deps) {
 
     if (request.method === 'GET' && url.pathname === '/') {
       response.writeHead(302, {
+        ...dashboardSecurityHeaders,
+        Location: '/dashboard/' + url.search,
+        'Cache-Control': 'no-store',
+      });
+      response.end();
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/dashboard') {
+      response.writeHead(308, {
         ...dashboardSecurityHeaders,
         Location: '/dashboard/' + url.search,
         'Cache-Control': 'no-store',
