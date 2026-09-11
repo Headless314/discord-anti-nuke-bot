@@ -772,7 +772,7 @@ function startDashboardServer(deps) {
   });
 
   dashboardServer.listen(dashboardPort, '0.0.0.0', () => {
-    if (isCloudflareTunnelEnabled()) {
+    if (isCloudflareTunnelEnabled() && !hasRemoteUrl) {
       console.log('Starting Cloudflare Quick Tunnel for the owner dashboard...');
       let activeTunnel = null;
       let shuttingDown = false;

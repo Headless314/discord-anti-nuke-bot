@@ -69,6 +69,10 @@ When the bot connects, it prints a private owner dashboard link to the console. 
 
 Whitelists, alert settings, enable state, server configuration, and the global bot status are saved in `data/settings.json`. Runtime activity counters are saved in `data/runtime.json` during shutdown and restored on startup. Automatic and manual backups are saved in `data/backups/`. These data paths are ignored by Git.
 
+### Railway deployment
+
+Railway detects this as a Node.js service from `package.json` and starts it with `npm start`. Set `DISCORD_TOKEN` and `DASHBOARD_PASSWORD` in Railway Variables, then attach a public domain to the service for dashboard access. Railway supplies `PORT` automatically; do not add a `requirements.txt` file or a Python build command.
+
 ## Commands
 
 ### Protection
@@ -170,19 +174,21 @@ Backups include guild metadata, roles, role permissions, channels, categories, p
 - `TRUSTED_USER_IDS`: comma-separated IDs excluded from automatic action.
 - `LOG_CHANNEL_ID`: optional fallback log channel for servers that have not run `>setup`.
 - `OWNER_USER_ID`: optional Discord user ID that receives DM logs and owns whitelist changes; if blank, each server owner is used.
-- `SERVER_PORT`: port supplied by Bot Hosting; the dashboard uses it automatically when present.
-- `DASHBOARD_PORT`: fallback dashboard port for hosts that do not provide `SERVER_PORT` or `PORT`; defaults to `3000`.
+- `PORT`: port supplied by Railway and most Node hosts; it takes priority automatically.
+- `SERVER_PORT`: port supplied by Bot Hosting; used when `PORT` is not available.
+- `DASHBOARD_PORT`: fallback dashboard port for hosts that provide neither `PORT` nor `SERVER_PORT`; defaults to `3000`.
 - `DASHBOARD_TOKEN`: optional private access token; if blank, a fresh token is generated on each start.
 - `DASHBOARD_REQUIRE_TOKEN`: set to `on` to require the private access token in addition to the password. It defaults to `off`, making the dashboard public at its HTTPS URL while still requiring `DASHBOARD_PASSWORD`.
 - `DASHBOARD_PASSWORD`: required password for the public dashboard; keep it in the host's environment variables and use at least 12 characters.
 
 Dashboard security uses the private access token, the password, HttpOnly/SameSite session cookies, timing-safe password comparison, five-attempt login throttling, same-origin checks for writes, and security response headers.
 - `DASHBOARD_PUBLIC_URL`: optional public URL override for the public app endpoint; the access token is added automatically. On Bot Hosting, use the public app URL (for example, `https://your-public-app.apps.bot-hosting.cloud`), not the control-panel URL such as `https://bot-hosting.net/a/d/<id>`.
-- `DASHBOARD_PUBLIC_HOST`: public hostname or IP when the host exposes the dashboard port directly; the bot formats it as `http://host:<port>/dashboard/`. Bot Hosting users must expose `DASHBOARD_PORT` in the panel.
+- `DASHBOARD_PUBLIC_HOST`: public hostname or IP when the host exposes the dashboard port directly; the bot formats it as `http://host:<port>/dashboard/`.
+- `RAILWAY_PUBLIC_DOMAIN`: Railway's public domain, detected automatically when Railway provides it; HTTPS is assumed when no scheme is included.
 - `CLOUDFLARE_TUNNEL`: starts a temporary Cloudflare Quick Tunnel automatically and prints the HTTPS dashboard link immediately, then checks reachability in the background. It is enabled by default; set it to `off` only to disable it. This does not require a Cloudflare account, but the link changes when the bot restarts.
 - `CLOUDFLARED_BIN`: optional path to the `cloudflared` executable. Leave it blank or omit it; the bot uses the installed package and then falls back to `npx cloudflared`. The placeholder value `cloudflared` is also treated as blank so copied example settings work.
 
-The dashboard server listens on `0.0.0.0` so hosting providers can route traffic to it. A localhost URL is only usable from the machine running the bot; configure one of the public URL/host variables for remote access. The Bot Hosting control-panel URL is not an app endpoint and will return 404 for dashboard assets.
+The dashboard server listens on `0.0.0.0` so Railway and other hosting providers can route traffic to it. Railway's `PORT` and public domain are detected automatically; for other hosts, configure a public URL/host and expose the selected port. The Bot Hosting control-panel URL is not an app endpoint and will return 404 for dashboard assets.
 
 ### Automatic HTTPS link with Cloudflare
 
