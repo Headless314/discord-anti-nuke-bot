@@ -65,7 +65,7 @@ The bot cannot remove a role above its highest role. It cannot undo already-dele
 7. Run `>setup` in the channel where security alerts should be posted.
 8. Add alert recipients with `>admin add <discord-user-id>`.
 
-When the bot connects, it prints a private owner dashboard link to the console. Open that link to manage protection state, dry-run mode, lockdown, thresholds, activity windows, risk backups, whitelist entries, and the response for each action. The old Discord dashboard command was removed. Command responses use Discord ANSI code blocks with rotating green, yellow, violet, and red lines where the client supports ANSI rendering.
+When the bot connects, it prints a private owner dashboard link to the console. Open that link to manage protection state, dry-run mode, lockdown, thresholds, activity windows, risk backups, whitelist entries, and the response for each action. Help output uses an editable `help-banner.txt` above a compact command grid; set `HELP_COMMAND_ICON` if you want a marker such as `🙏🏻` before each displayed command. Command responses use Discord ANSI code blocks.
 
 Whitelists, alert settings, enable state, server configuration, and the global bot status are saved in `data/settings.json`. Runtime activity counters are saved in `data/runtime.json` during shutdown and restored on startup. Automatic and manual backups are saved in `data/backups/`. These data paths are ignored by Git.
 
@@ -135,9 +135,13 @@ Configured `>admin add <id>` recipients receive threshold risk alerts and alerts
 
 ### Backups
 
-- `>backup create` - Save a manual structure backup.
-- `>backup list` - List this server's saved backups.
-- `>backup inspect <file>` - Inspect a saved backup.
+- `>backup create [reason]` - Save a manual structure backup with an optional reason.
+- `>backup list [count]` - List the newest backups with timestamps and role/channel counts.
+- `>backup latest` - Show the newest backup.
+- `>backup inspect <file>` - Inspect a saved backup's metadata.
+- `>backup delete <file>` - Delete a backup; server-owner only.
+
+The bot automatically keeps the newest 25 backups per server. Backups are structure snapshots only; they do not restore messages or members automatically.
 
 ### Audit and configuration
 
@@ -168,6 +172,9 @@ Backups include guild metadata, roles, role permissions, channels, categories, p
 ## Configuration
 
 - `COMMAND_PREFIX`: startup default is `>`. The server owner can change it at runtime with `>prefix x`; command parsing and generated help/error messages use the new value everywhere, including whitelist help.
+- `HELP_BANNER_FILE`: banner file loaded above help commands; defaults to `help-banner.txt`. Edit that file to replace the supplied ASCII art.
+- `HELP_BANNER`: optional inline banner override; use `\n` for line breaks.
+- `HELP_COMMAND_ICON`: optional marker displayed before help commands; defaults to `🙏🏻`. Set it blank to remove the marker.
 - `NUKE_WINDOW_MS`: counting window in milliseconds; defaults to `30000`.
 - `AUTO_BACKUP_ON_RISK`: create a structure backup before mitigation; defaults to `true`.
 - `CHANNEL_DELETE_THRESHOLD`, `CHANNEL_CREATE_THRESHOLD`, `ROLE_DELETE_THRESHOLD`, `ROLE_CREATE_THRESHOLD`, `BAN_THRESHOLD`: per-action thresholds.
