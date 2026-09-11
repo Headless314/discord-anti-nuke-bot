@@ -133,6 +133,20 @@ const settingsFile = path.join(dataDirectory, 'settings.json');
 const runtimeFile = path.join(dataDirectory, 'runtime.json');
 const backupDirectory = path.join(dataDirectory, 'backups');
 const maxBackupsPerGuild = 25;
+const helpBannerFile = path.join(__dirname, process.env.HELP_BANNER_FILE || 'help-banner.txt');
+const helpCommandIcon = String(process.env.HELP_COMMAND_ICON || '🙏🏻').trim();
+
+function loadHelpBanner() {
+  const configured = String(process.env.HELP_BANNER || '').replace(/\\n/g, '\n').trim();
+  if (configured) return configured;
+  try {
+    return fs.readFileSync(helpBannerFile, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+const helpBanner = loadHelpBanner();
 const snowflakePattern = /^\d{15,20}$/;
 
 const whitelistNames = {
@@ -361,6 +375,11 @@ async function saveRotatingMediaFromDm(message, kind) {
   }
 }
 
+function helpAnsiBlock(lines) {
+  const tick = String.fromCharCode(96).repeat(3);
+  return tick + 'ansi\n' + lines.filter((line) => line !== undefined && line !== null).join('\n') + '\n' + tick;
+}
+
 function diffBlock(lines) {
   const tick = String.fromCharCode(96).repeat(3);
   const ansiColors = ['32', '33', '35', '31']; // green, yellow, violet, red
@@ -374,6 +393,10 @@ function diffBlock(lines) {
 }
 
 function plainCommandPayload(payload) {
+  if (payload && payload.__raw) {
+    const { __raw, ...rawPayload } = payload;
+    return rawPayload;
+  }
   if (typeof payload === 'string') return { content: diffBlock([payload]) };
   if (!payload || !Array.isArray(payload.embeds) || !payload.embeds.length) return payload;
   const tick = String.fromCharCode(96).repeat(3);
@@ -1206,6 +1229,63 @@ async function recordActivity({
   await notifyAdmins(guild, reason, executor.id, backup && backup.fileName);
 }
 
+function helpCommand(command) {
+  return helpCommandIcon + config.prefix + command;
+}
+
+function helpGrid(commands) {
+  const values = commands.map(helpCommand);
+  const rows = [];
+  for (let index = 0; index < values.length; index += 2) {
+    const left = values[index];
+    const right = values[index + 1];
+    rows.push(right ? left.padEnd(26, ' ') + right : left);
+  }
+  return rows;
+}
+
+function helpCommandPayload(command, page = 1) {
+  const lines = [];
+  if (helpBanner) {
+    lines.push(...helpBanner.split(/\r?\n/));
+    lines.push('');
+  }
+  const section = (title, commands) => {
+    lines.push(title.toUpperCase());
+    lines.push(...helpGrid(commands));
+    lines.push('');
+  };
+
+  if (command === 'whitelist' || command === 'wl') {
+    section('whitelist commands', ['whitelist add @user', 'whitelist user add <id>', 'whitelist user remove <id>', 'whitelist channel add <id>', 'whitelist category add <id>', 'whitelist role add <id>', 'whitelist list']);
+  } else if (command === 'backup') {
+    section('backup commands', ['backup create [reason]', 'backup list [count]', 'backup latest', 'backup inspect <file>', 'backup delete <file>']);
+  } else if (command === 'admin') {
+    section('admin commands', ['admin add <id>', 'admin remove <id>', 'admin list', 'admin test']);
+  } else if (command === 'audit' || command === 'logs') {
+    section('audit commands', ['audit recent', 'audit recent 15']);
+  } else if (command === 'utility' || command === 'tools') {
+    section('utility commands', ['ping', 'serverinfo', 'userinfo [@user]', 'channelinfo [#channel]', 'roleinfo <@role>', 'purge <1-100>', 'slowmode <0-21600>', 'lockdown on|off|status']);
+  } else if (command === 'config') {
+    section('config commands', ['config show', 'config threshold <type> <number>', 'config window <seconds>', 'config backup on|off', 'config dry-run on|off']);
+  } else if (page === 1) {
+    section('protection', ['antinuke status', 'antinuke enable', 'antinuke disable', 'antinuke dry-run on|off', 'antinuke reset', 'setup']);
+    section('status', ['status', 'antinuke status']);
+    section('media', ['next pfp', 'next banner']);
+    section('access control', ['whitelist ...', 'admin ...']);
+    section('command prefix', ['prefix x', 'prefix reset']);
+  } else {
+    section('backups', ['backup create [reason]', 'backup list [count]', 'backup latest', 'backup inspect <file>', 'backup delete <file>']);
+    section('utilities', ['ping', 'serverinfo', 'userinfo', 'channelinfo', 'roleinfo', 'purge', 'slowmode', 'lockdown']);
+    section('configuration', ['config show', 'config threshold <type> <number>', 'config window <seconds>', 'config backup on|off', 'config dry-run on|off', 'prefix x', 'prefix reset']);
+    section('detailed help', ['help whitelist', 'help backup', 'help admin', 'help audit', 'help config', 'help utility']);
+  }
+
+  while (lines.at(-1) === '') lines.pop();
+  const embed = new DiscordEmbedBuilder().setDescription(helpAnsiBlock(lines));
+  return { __raw: true, embeds: [embed], components: command ? [] : helpNavigation(page) };
+}
+
 function helpEmbed(command, page = 1) {
   const commandList = (...commands) => {
     const tick = String.fromCharCode(96).repeat(3);
@@ -1776,59 +1856,99 @@ async function handleAuditCommand(message, args) {
   }
 }
 
+function readServerBackup(guildId, fileName) {
+  const backupPath = getBackupPath(guildId, fileName);
+  if (!backupPath) return null;
+  try {
+    return { fileName, filePath: backupPath, backup: JSON.parse(fs.readFileSync(backupPath, 'utf8')) };
+  } catch (error) {
+    console.error('Could not read backup ' + fileName + ':', error.message);
+    return null;
+  }
+}
+
+function backupSummary(fileName, backup, index) {
+  const roles = Array.isArray(backup.roles) ? backup.roles.length : 0;
+  const channels = Array.isArray(backup.channels) ? backup.channels.length : 0;
+  const createdAt = backup.createdAt ? new Date(backup.createdAt).toISOString() : 'unknown date';
+  return (index === undefined ? '' : (index + 1) + '. ') + fileName + '\n   ' + createdAt + ' | ' + roles + ' roles | ' + channels + ' channels';
+}
+
 async function handleBackupCommand(message, args) {
   if (!isAdministrator(message.member)) {
     await sendCommandResponse(message, 'Administrator permission required.');
     return;
   }
 
-  const action = args.shift()?.toLowerCase();
+  const action = (args.shift() || 'list').toLowerCase();
   if (action === 'create') {
-    const backup = await createServerBackup(message.guild, 'Manual backup');
-    await sendCommandResponse(message, 
-      'Backup created: ' +
-        backup.fileName +
-        '\nRoles: ' +
-        backup.roles +
-        '\nChannels: ' +
-        backup.channels,
-    );
+    const reason = args.join(' ').trim().slice(0, 200) || 'Manual backup';
+    try {
+      const backup = await createServerBackup(message.guild, reason);
+      await sendCommandResponse(message, 'Backup created\nFile: ' + backup.fileName + '\nReason: ' + reason + '\nRoles: ' + backup.roles + '\nChannels: ' + backup.channels + '\nUse ' + config.prefix + 'backup inspect ' + backup.fileName + ' to inspect it.');
+    } catch (error) {
+      console.error('Could not create manual backup:', error.message);
+      await sendCommandResponse(message, 'Backup creation failed: ' + error.message);
+    }
     return;
   }
 
   if (action === 'list') {
-    const backups = listServerBackups(message.guild.id);
-    await sendCommandResponse(message, 
-      backups.length ? 'Server backups:\n' + backups.slice(0, 10).join('\n') : 'No backups found.',
-    );
+    const requestedLimit = Number.parseInt(args.shift() || '10', 10);
+    const limit = Math.min(Math.max(Number.isInteger(requestedLimit) ? requestedLimit : 10, 1), 15);
+    const allBackups = listServerBackups(message.guild.id);
+    const backups = allBackups.slice(0, limit);
+    const summaries = backups.map((fileName, index) => {
+      const entry = readServerBackup(message.guild.id, fileName);
+      return entry ? backupSummary(fileName, entry.backup, index) : (index + 1) + '. ' + fileName + '\n   unreadable backup file';
+    });
+    await sendCommandResponse(message, summaries.length
+      ? 'Server backups (' + summaries.length + '/' + allBackups.length + ')\n' + summaries.join('\n') + '\nUse ' + config.prefix + 'backup latest or ' + config.prefix + 'backup inspect <file>.'
+      : 'No backups found. Create one with ' + config.prefix + 'backup create [reason].');
     return;
   }
 
-  if (action === 'inspect') {
+  if (action === 'latest') {
+    const fileName = listServerBackups(message.guild.id)[0];
+    const entry = fileName && readServerBackup(message.guild.id, fileName);
+    await sendCommandResponse(message, entry
+      ? 'Latest backup\n' + backupSummary(entry.fileName, entry.backup)
+      : 'No backups found. Create one with ' + config.prefix + 'backup create [reason].');
+    return;
+  }
+
+  if (action === 'inspect' || action === 'info') {
+    const firstFileArg = args.shift();
+    const requestedFile = (firstFileArg || '').toLowerCase() === 'latest'
+      ? listServerBackups(message.guild.id)[0]
+      : [firstFileArg, ...args].filter(Boolean).join(' ');
+    const entry = requestedFile && readServerBackup(message.guild.id, requestedFile);
+    if (!entry) {
+      await sendCommandResponse(message, 'Backup file not found or unreadable. Use ' + config.prefix + 'backup list first.');
+      return;
+    }
+    const backup = entry.backup;
+    await sendCommandResponse(message, 'Backup details\n' + backupSummary(entry.fileName, backup) + '\nReason: ' + (backup.reason || 'not recorded') + '\nGuild: ' + (backup.guild?.name || message.guild.name) + ' (' + message.guild.id + ')');
+    return;
+  }
+
+  if (action === 'delete' || action === 'remove') {
+    if (!isGuildOwner(message)) {
+      await sendCommandResponse(message, 'Only the server owner can delete backups.');
+      return;
+    }
     const fileName = args.shift();
     const backupPath = fileName && getBackupPath(message.guild.id, fileName);
     if (!backupPath) {
-      await sendCommandResponse(message, 'Backup file not found. Use >backup list first.');
+      await sendCommandResponse(message, 'Backup file not found. Use ' + config.prefix + 'backup list first.');
       return;
     }
-
-    const backup = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
-    await sendCommandResponse(message, 
-      'Backup: ' +
-        fileName +
-        '\nCreated: ' +
-        backup.createdAt +
-        '\nReason: ' +
-        backup.reason +
-        '\nRoles: ' +
-        backup.roles.length +
-        '\nChannels: ' +
-        backup.channels.length,
-    );
+    fs.unlinkSync(backupPath);
+    await sendCommandResponse(message, 'Deleted backup: ' + fileName);
     return;
   }
 
-  await sendCommandResponse(message, 'Use >backup create, >backup list, or >backup inspect <file>.');
+  await sendCommandResponse(message, 'Use ' + config.prefix + 'backup create [reason], ' + config.prefix + 'backup list [count], ' + config.prefix + 'backup latest, ' + config.prefix + 'backup inspect <file>, or ' + config.prefix + 'backup delete <file>.');
 }
 
 client.once('ready', async () => {
@@ -2011,7 +2131,7 @@ client.on('interactionCreate', async (interaction) => {
     if (!interaction.inGuild() || !interaction.isButton()) return;
     if (!interaction.customId.startsWith('help:page:')) return;
     const page = interaction.customId.endsWith(':2') ? 2 : 1;
-    await interaction.update(plainCommandPayload({ embeds: [helpEmbed(null, page)], components: helpNavigation(page) }));
+    await interaction.update(helpCommandPayload(null, page));
   } catch (error) {
     console.error('Interaction handling error:', error.message);
     if (interaction.deferred || interaction.replied) return;
@@ -2064,10 +2184,7 @@ client.on('messageCreate', async (message) => {
     else await sendCommandResponse(message, 'use >next pfp or >next banner.');
   } else if (command === 'help') {
     const section = args.shift()?.toLowerCase();
-    await sendCommandResponse(message, {
-      embeds: [helpEmbed(section)],
-      components: section ? [] : helpNavigation(1),
-    });
+    await sendCommandResponse(message, helpCommandPayload(section, 1));
   } else if (command === 'setup') {
     if (!isAdministrator(message.member)) {
       await sendCommandResponse(message, 'Administrator permission required.');
