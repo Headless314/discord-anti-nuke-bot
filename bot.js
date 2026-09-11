@@ -112,7 +112,7 @@ const config = {
   defaultLogChannelId: process.env.LOG_CHANNEL_ID || null,
   windowMs: numberFromEnv('NUKE_WINDOW_MS', 30_000, 1_000),
   autoBackupOnRisk: booleanFromEnv('AUTO_BACKUP_ON_RISK', true),
-  commandAutoDeleteMs: numberFromEnv('COMMAND_AUTO_DELETE_MS', 60_000, 1_000),
+  commandAutoDeleteMs: numberFromEnv('COMMAND_AUTO_DELETE_MS', 30_000, 1_000),
   thresholds: {
     channel_delete: numberFromEnv('CHANNEL_DELETE_THRESHOLD', 5),
     channel_create: numberFromEnv('CHANNEL_CREATE_THRESHOLD', 5),
