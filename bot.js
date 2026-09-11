@@ -1249,10 +1249,24 @@ function helpCommand(command) {
 function helpGrid(commands) {
   const values = commands.map(helpCommand);
   const rows = [];
+  const maxPairedCommandLength = 18;
+  const columnWidth = 20;
+
   for (let index = 0; index < values.length; index += 2) {
     const left = values[index];
     const right = values[index + 1];
-    rows.push(right ? left.padEnd(26, ' ') + right : left);
+    if (!right) {
+      rows.push(left);
+      continue;
+    }
+
+    if (left.length > maxPairedCommandLength || right.length > maxPairedCommandLength) {
+      rows.push(left);
+      rows.push(right);
+      continue;
+    }
+
+    rows.push(left.padEnd(columnWidth, ' ') + right);
   }
   return rows;
 }
