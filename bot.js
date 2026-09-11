@@ -728,6 +728,11 @@ function splitLogMessage(content, maxLength = 1900) {
   return chunks.length ? chunks : ['[empty log]'];
 }
 
+function truncateLogField(value, maxLength = 1024) {
+  const text = String(value ?? '[empty]');
+  return text.length > maxLength ? text.slice(0, maxLength - 1) + '…' : text;
+}
+
 async function sendOwnerMessage(guild, content) {
   const ownerId = getOwnerUserId(guild);
   if (!ownerId) return false;
@@ -737,9 +742,12 @@ async function sendOwnerMessage(guild, content) {
   });
   if (!owner) return false;
 
-  for (const chunk of splitLogMessage(content)) {
+  const payloads = typeof content === 'string'
+    ? splitLogMessage(content).map((chunk) => ({ content: chunk }))
+    : [content];
+  for (const payload of payloads) {
     await owner
-      .send({ content: chunk, allowedMentions: { parse: [] } })
+      .send({ ...payload, allowedMentions: { parse: [] } })
       .catch((error) => console.error('Could not DM the server owner:', error.message));
   }
   return true;
@@ -771,18 +779,16 @@ function isAdministrator(member) {
 }
 
 async function logAction(guild, title, description, color = 0x050505) {
-  const logMessage =
-    '[Anti-nuke security log]\n' +
-    'Server: ' +
-    sanitizeLogText(guild.name) +
-    ' (' +
-    guild.id +
-    ')\n' +
-    'Title: ' +
-    sanitizeLogText(title) +
-    '\n' +
-    sanitizeLogText(description);
-  await sendOwnerMessage(guild, logMessage);
+  const embed = new DiscordEmbedBuilder()
+    .setColor(color)
+    .setTitle(sanitizeLogText(title))
+    .setDescription(truncateLogField(sanitizeLogText(description), 4096))
+    .addFields(
+      { name: 'server', value: truncateLogField(sanitizeLogText(guild.name), 1024), inline: true },
+      { name: 'server id', value: guild.id, inline: true },
+    )
+    .setTimestamp();
+  await sendOwnerMessage(guild, { embeds: [embed] });
 }
 
 async function findExecutor(guild, action, targetId) {
@@ -2143,29 +2149,32 @@ client.once('ready', async () => {
 });
 
 function formatDeletedMessage(message) {
+  const channelName = message.channel?.name || message.channelId || 'unknown channel';
+  const authorName = message.author?.tag || message.author?.username || message.author?.id || 'unknown user';
+  const content = sanitizeLogText(message.content || '[no text content]');
   const attachmentLines = [...(message.attachments?.values() || [])].map((attachment) => {
     const type = attachment.contentType || 'attachment';
     const voiceLabel = type.startsWith('audio/') ? 'voice/audio' : type;
-    return '- ' + (attachment.name || 'unnamed file') + ' [' + voiceLabel + '] ' + attachment.url;
+    return (attachment.name || 'unnamed file') + ' · ' + voiceLabel + ' · ' + attachment.url;
   });
   const stickerLines = [...(message.stickers?.values() || [])].map(
-    (sticker) => '- sticker: ' + sticker.name + ' (' + sticker.id + ')',
+    (sticker) => 'sticker: ' + sticker.name + ' (' + sticker.id + ')',
   );
   const media = [...attachmentLines, ...stickerLines];
-  return (
-    '[Deleted message]\n' +
-    'Server: ' +
-    sanitizeLogText(message.guild.name) + '\n' +
-    'Channel: #' +
-    sanitizeLogText(message.channel?.name || message.channelId || 'unknown') + '\n' +
-    'Author: ' +
-    sanitizeLogText(message.author?.tag || message.author?.id || 'unknown') + '\n' +
-    'Message ID: ' +
-    message.id + '\n' +
-    'Content: ' +
-    sanitizeLogText(message.content || '[no text content]') +
-    (media.length ? '\nMedia:\n' + media.join('\n') : '\nMedia: none')
-  );
+  const embed = new DiscordEmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle('Message deleted')
+    .setDescription('A message was deleted from **#' + truncateLogField(sanitizeLogText(channelName), 80) + '**.')
+    .addFields(
+      { name: 'author', value: truncateLogField(sanitizeLogText(authorName)), inline: true },
+      { name: 'channel', value: truncateLogField('#' + sanitizeLogText(channelName)), inline: true },
+      { name: 'message id', value: message.id, inline: true },
+      { name: 'content', value: truncateLogField(content) },
+    )
+    .setFooter({ text: truncateLogField(sanitizeLogText(message.guild.name), 2048) })
+    .setTimestamp(message.createdAt || new Date());
+  if (media.length) embed.addFields({ name: 'media', value: truncateLogField(media.join('\n')) });
+  return { embeds: [embed] };
 }
 
 client.on('messageDelete', async (message) => {
@@ -2175,14 +2184,21 @@ client.on('messageDelete', async (message) => {
 
 client.on('messageDeleteBulk', async (messages, channel) => {
   if (!channel.guild) return;
-  const entries = [...messages.values()]
-    .filter((message) => !message.author?.bot)
-    .map(formatDeletedMessage);
-  if (!entries.length) return;
-  await sendOwnerMessage(
-    channel.guild,
-    '[Bulk message deletion]\nServer: ' + sanitizeLogText(channel.guild.name) + '\n\n' + entries.join('\n\n'),
-  );
+  const deleted = [...messages.values()].filter((message) => !message.author?.bot);
+  if (!deleted.length) return;
+  const summary = deleted.map((message, index) => {
+    const author = message.author?.tag || message.author?.username || message.author?.id || 'unknown user';
+    const content = sanitizeLogText(message.content || '[no text content]').replace(/\s+/g, ' ');
+    return (index + 1) + '. ' + truncateLogField(sanitizeLogText(author), 80) + ' · ' + truncateLogField(content, 180);
+  }).join('\n');
+  const embed = new DiscordEmbedBuilder()
+    .setColor(0xed4245)
+    .setTitle('Messages deleted in bulk')
+    .setDescription('**' + deleted.length + '** messages were removed from **#' + truncateLogField(sanitizeLogText(channel.name || channel.id), 80) + '**.')
+    .addFields({ name: 'deleted messages', value: truncateLogField(summary) })
+    .setFooter({ text: truncateLogField(sanitizeLogText(channel.guild.name), 2048) })
+    .setTimestamp();
+  await sendOwnerMessage(channel.guild, { embeds: [embed] });
 });
 
 client.on('channelDelete', async (channel) => {
