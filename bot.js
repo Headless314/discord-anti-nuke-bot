@@ -1269,7 +1269,7 @@ function helpCommandPayload(command, page = 1) {
   if (command === 'whitelist' || command === 'wl') {
     section('whitelist commands', ['whitelist add @user', 'whitelist user add <id>', 'whitelist user remove <id>', 'whitelist channel add <id>', 'whitelist category add <id>', 'whitelist role add <id>', 'whitelist list']);
   } else if (command === 'backup') {
-    section('backup commands', ['backup create [reason]', 'backup list [count]', 'backup latest', 'backup inspect <file>', 'backup diff <file>', 'backup export <file>', 'backup delete <file>']);
+    section('backup commands', ['backup create', 'backup list', 'backup latest', 'backup inspect', 'backup diff', 'backup verify', 'backup stats', 'backup export', 'backup delete']);
   } else if (command === 'admin') {
     section('admin commands', ['admin add <id>', 'admin remove <id>', 'admin list', 'admin test']);
   } else if (command === 'audit' || command === 'logs') {
@@ -1919,6 +1919,35 @@ function backupSummary(fileName, backup, index) {
   return (index === undefined ? '' : (index + 1) + '. ') + fileName + '\n   ' + createdAt + ' | ' + roles + ' roles | ' + channels + ' channels';
 }
 
+function validateBackupSnapshot(backup, guildId) {
+  const errors = [];
+  const guild = backup && backup.guild;
+  if (!backup || typeof backup !== 'object') errors.push('snapshot is not an object');
+  if (!guild || guild.id !== guildId) errors.push('guild id does not match this server');
+  for (const pair of [['roles', backup && backup.roles], ['channels', backup && backup.channels]]) {
+    const label = pair[0];
+    const items = pair[1];
+    if (!Array.isArray(items)) {
+      errors.push(label + ' list is missing');
+      continue;
+    }
+    const ids = items.map((item) => item && item.id).filter(Boolean);
+    if (ids.length !== items.length) errors.push(label + ' contains entries without ids');
+    if (ids.length !== new Set(ids).size) errors.push(label + ' contains duplicate ids');
+  }
+  return errors;
+}
+
+function backupStorageStats(guildId) {
+  const files = listServerBackups(guildId);
+  let bytes = 0;
+  for (const fileName of files) {
+    const filePath = getBackupPath(guildId, fileName);
+    if (filePath) bytes += fs.statSync(filePath).size;
+  }
+  return { count: files.length, bytes, newest: files[0] || null, oldest: files[files.length - 1] || null };
+}
+
 async function handleBackupCommand(message, args) {
   if (!isAdministrator(message.member)) {
     await sendCommandResponse(message, 'Administrator permission required.');
@@ -1959,6 +1988,28 @@ async function handleBackupCommand(message, args) {
     await sendCommandResponse(message, entry
       ? 'Latest backup\n' + backupSummary(entry.fileName, entry.backup)
       : 'No backups found. Create one with ' + config.prefix + 'backup create [reason].');
+    return;
+  }
+
+  if (action === 'verify' || action === 'validate' || action === 'check') {
+    const requestedFile = resolveBackupFileName(message.guild.id, args);
+    const entry = requestedFile && readServerBackup(message.guild.id, requestedFile);
+    if (!entry) {
+      await sendCommandResponse(message, 'Backup file not found or unreadable. Use ' + config.prefix + 'backup list first.');
+      return;
+    }
+    const errors = validateBackupSnapshot(entry.backup, message.guild.id);
+    await sendCommandResponse(message, errors.length
+      ? 'Backup verification failed\nFile: ' + entry.fileName + '\n- ' + errors.join('\n- ')
+      : 'Backup verified\nFile: ' + entry.fileName + '\nSnapshot structure and ids are valid.');
+    return;
+  }
+
+  if (action === 'stats' || action === 'storage') {
+    const stats = backupStorageStats(message.guild.id);
+    await sendCommandResponse(message, stats.count
+      ? 'Backup storage\nSnapshots: ' + stats.count + '\nTotal size: ' + stats.bytes.toLocaleString() + ' bytes\nNewest: ' + stats.newest + '\nOldest: ' + stats.oldest
+      : 'No backups found. Create one with ' + config.prefix + 'backup create.');
     return;
   }
 
@@ -2021,7 +2072,7 @@ async function handleBackupCommand(message, args) {
     return;
   }
 
-  await sendCommandResponse(message, 'Use ' + config.prefix + 'backup create [reason], ' + config.prefix + 'backup list [count], ' + config.prefix + 'backup latest, ' + config.prefix + 'backup inspect <file>, ' + config.prefix + 'backup diff <file>, ' + config.prefix + 'backup export <file>, or ' + config.prefix + 'backup delete <file>.');
+  await sendCommandResponse(message, 'Use ' + config.prefix + 'backup create [reason], ' + config.prefix + 'backup list [count], ' + config.prefix + 'backup latest, ' + config.prefix + 'backup inspect <file>, ' + config.prefix + 'backup diff <file>, ' + config.prefix + 'backup verify <file>, ' + config.prefix + 'backup stats, ' + config.prefix + 'backup export <file>, or ' + config.prefix + 'backup delete <file>.');
 }
 
 const dashboardDependencies = {
