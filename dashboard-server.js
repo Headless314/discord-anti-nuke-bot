@@ -542,9 +542,13 @@ function buildDashboardHostUrl(hostValue, dashboardToken, dashboardPort) {
 function startDashboardServer(deps) {
   if (dashboardServer) return dashboardServer;
 
-  const dashboardPassword = String(process.env.DASHBOARD_PASSWORD || '');
-  if (!dashboardPassword) {
-    throw new Error('DASHBOARD_PASSWORD is required before starting the owner dashboard.');
+  const configuredDashboardPassword = String(process.env.DASHBOARD_PASSWORD || '');
+  // Do not let a missing optional dashboard variable prevent Railway from
+  // binding PORT. Generate a temporary password so the dashboard stays
+  // protected while the deployment remains reachable.
+  const dashboardPassword = configuredDashboardPassword || crypto.randomBytes(24).toString('base64url');
+  if (!configuredDashboardPassword) {
+    console.warn('DASHBOARD_PASSWORD is not set. Generated a temporary dashboard password for this run: ' + dashboardPassword);
   }
   if (dashboardPassword.length < 12) {
     console.warn('DASHBOARD_PASSWORD should be at least 12 characters long.');
