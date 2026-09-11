@@ -1249,24 +1249,13 @@ function helpCommand(command) {
 function helpGrid(commands) {
   const values = commands.map(helpCommand);
   const rows = [];
-  const maxPairedCommandLength = 18;
-  const columnWidth = 20;
+  const midpoint = Math.ceil(values.length / 2);
+  const columnWidth = 22;
 
-  for (let index = 0; index < values.length; index += 2) {
+  for (let index = 0; index < midpoint; index += 1) {
     const left = values[index];
-    const right = values[index + 1];
-    if (!right) {
-      rows.push(left);
-      continue;
-    }
-
-    if (left.length > maxPairedCommandLength || right.length > maxPairedCommandLength) {
-      rows.push(left);
-      rows.push(right);
-      continue;
-    }
-
-    rows.push(left.padEnd(columnWidth, ' ') + right);
+    const right = values[index + midpoint];
+    rows.push(right ? left.padEnd(columnWidth, ' ') + right : left);
   }
   return rows;
 }
@@ -1290,16 +1279,9 @@ function helpCommandPayload(command, page = 1) {
   } else if (command === 'config') {
     section('config commands', ['config show', 'config threshold <type> <number>', 'config window <seconds>', 'config backup on|off', 'config dry-run on|off']);
   } else if (page === 1) {
-    section('protection', ['antinuke status', 'antinuke enable', 'antinuke disable', 'antinuke dry-run on|off', 'antinuke reset', 'setup']);
-    section('status', ['status', 'antinuke status']);
-    section('media', ['next pfp', 'next banner']);
-    section('access control', ['whitelist ...', 'admin ...']);
-    section('command prefix', ['prefix x', 'prefix reset']);
+    section('protection', ['antinuke status', 'antinuke enable', 'antinuke disable', 'antinuke dry-run', 'antinuke reset', 'setup', 'status', 'antinuke status', 'next pfp', 'next banner', 'whitelist', 'admin', 'prefix x', 'prefix reset']);
   } else {
-    section('backups', ['backup create [reason]', 'backup list [count]', 'backup latest', 'backup inspect <file>', 'backup delete <file>']);
-    section('utilities', ['ping', 'serverinfo', 'userinfo', 'channelinfo', 'roleinfo', 'purge', 'slowmode', 'lockdown']);
-    section('configuration', ['config show', 'config threshold <type> <number>', 'config window <seconds>', 'config backup on|off', 'config dry-run on|off', 'prefix x', 'prefix reset']);
-    section('detailed help', ['help whitelist', 'help backup', 'help admin', 'help audit', 'help config', 'help utility']);
+    section('commands', ['backup create', 'backup list', 'backup latest', 'backup inspect', 'backup diff', 'backup export', 'backup delete', 'ping', 'serverinfo', 'userinfo', 'channelinfo', 'roleinfo', 'purge', 'slowmode', 'lockdown', 'config show', 'config threshold', 'config window', 'config backup', 'config dry-run', 'prefix x', 'prefix reset', 'help whitelist', 'help backup', 'help admin', 'help audit', 'help config', 'help utility']);
   }
 
   const bannerLines = helpBanner ? helpBanner.split(/\r?\n/).filter((line) => line.length > 0) : [];
