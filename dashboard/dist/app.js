@@ -92,9 +92,9 @@
     if (button.dataset.tab) { state.tab = button.dataset.tab; state.query = ''; render(); return; }
     if (button.dataset.addType) { button.disabled = true; api('/dashboard/api/guilds/' + state.guildId + '/whitelist', { method: 'POST', body: JSON.stringify({ type: button.dataset.addType, id: button.dataset.addId }) }).then(function (body) { state.whitelist[button.dataset.addType] = body.whitelist; show('Added to whitelist.'); render(); }).catch(function (error) { button.disabled = false; show(error.message); }); return; }
     if (button.dataset.removeType) { api('/dashboard/api/guilds/' + state.guildId + '/whitelist/' + button.dataset.removeType + '/' + button.dataset.removeId, { method: 'DELETE' }).then(function (body) { state.whitelist[button.dataset.removeType] = body.whitelist; show('Removed from whitelist.'); render(); }).catch(function (error) { show(error.message); }); return; }
-    if (button.dataset.refresh) { loadState().then(function () { show('Refreshed.'); }).catch(function (error) { show(error.message); }); return; }
-    if (button.dataset.backup) { button.disabled = true; api('/dashboard/api/guilds/' + state.guildId + '/backups', { method: 'POST' }).then(loadState).then(function () { show('Backup created.'); }).catch(function (error) { button.disabled = false; show(error.message); }); return; }
-    if (button.dataset.reset) { api('/dashboard/api/guilds/' + state.guildId + '/reset', { method: 'POST' }).then(loadState).then(function () { show('Counters reset.'); }).catch(function (error) { show(error.message); }); }
+    if (button.hasAttribute('data-refresh')) { loadState().then(function () { show('Refreshed.'); }).catch(function (error) { show(error.message); }); return; }
+    if (button.hasAttribute('data-backup')) { button.disabled = true; api('/dashboard/api/guilds/' + state.guildId + '/backups', { method: 'POST' }).then(loadState).then(function () { show('Backup created.'); }).catch(function (error) { button.disabled = false; show(error.message); }); return; }
+    if (button.hasAttribute('data-reset')) { api('/dashboard/api/guilds/' + state.guildId + '/reset', { method: 'POST' }).then(loadState).then(function () { show('Counters reset.'); }).catch(function (error) { show(error.message); }); }
   });
   loadState().catch(function (error) { root.innerHTML = '<main class="loading"><strong>Could not load JIN.</strong><p>' + esc(error.message) + '</p><button class="button" onclick="location.reload()">Try again</button></main>'; });
 })();

@@ -227,12 +227,11 @@ function buildWhitelistOptions(guild) {
   const users = [...guild.members.cache.values()]
     .filter((member) => !member.user?.bot)
     .map((member) => ({ id: member.id, label: member.user?.tag || member.displayName || member.id }))
-    .sort((left, right) => left.label.localeCompare(right.label))
-    .slice(0, 500);
+    .sort((left, right) => left.label.localeCompare(right.label));
   const roles = [...guild.roles.cache.values()]
     .filter((role) => role.id !== guild.id && !role.managed)
-    .map((role) => ({ id: role.id, label: '@' + role.name }))
-    .sort((left, right) => left.label.localeCompare(right.label));
+    .sort((left, right) => left.position - right.position)
+    .map((role) => ({ id: role.id, label: '@' + role.name }));
   const channels = [...guild.channels.cache.values()]
     .filter((channel) => channel.type !== 4)
     .map((channel) => ({ id: channel.id, label: '#' + channel.name }))
