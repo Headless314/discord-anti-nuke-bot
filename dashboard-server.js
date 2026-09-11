@@ -587,6 +587,11 @@ function startDashboardServer(deps) {
     const url = new URL(request.url || '/', 'http://localhost');
     const apiPrefix = '/dashboard/api';
 
+    if (request.method === 'GET' && (url.pathname === '/health' || url.pathname === '/healthz')) {
+      json(response, 200, { ok: true, service: 'dashboard' });
+      return;
+    }
+
     if (request.method === 'GET' && url.pathname === '/') {
       response.writeHead(302, {
         ...dashboardSecurityHeaders,
@@ -775,7 +780,11 @@ function startDashboardServer(deps) {
     response.end('Not found');
   });
 
+  dashboardServer.on('error', (error) => {
+    console.error('Owner dashboard server error:', error.message || error);
+  });
   dashboardServer.listen(dashboardPort, '0.0.0.0', () => {
+    console.log('Owner dashboard listening on 0.0.0.0:' + dashboardPort + ' (PORT=' + String(process.env.PORT || 'unset') + ')');
     if (isCloudflareTunnelEnabled() && !hasRemoteUrl) {
       console.log('Starting Cloudflare Quick Tunnel for the owner dashboard...');
       let activeTunnel = null;
