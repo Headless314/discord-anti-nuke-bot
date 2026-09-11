@@ -112,6 +112,7 @@ const config = {
   defaultLogChannelId: process.env.LOG_CHANNEL_ID || null,
   windowMs: numberFromEnv('NUKE_WINDOW_MS', 30_000, 1_000),
   autoBackupOnRisk: booleanFromEnv('AUTO_BACKUP_ON_RISK', true),
+  commandAutoDeleteMs: numberFromEnv('COMMAND_AUTO_DELETE_MS', 60_000, 1_000),
   thresholds: {
     channel_delete: numberFromEnv('CHANNEL_DELETE_THRESHOLD', 5),
     channel_create: numberFromEnv('CHANNEL_CREATE_THRESHOLD', 5),
@@ -382,7 +383,7 @@ function helpAnsiBlock(lines) {
 
 function diffBlock(lines) {
   const tick = String.fromCharCode(96).repeat(3);
-  const ansiColors = ['32', '33', '35', '31']; // green, yellow, violet, red
+  const ansiColors = ['33']; // green, yellow, violet, red
   const withConfiguredPrefix = (line) => String(line).replace(/>(?=[a-z])/gi, config.prefix);
   return tick + 'ansi\n' + lines
     .filter(Boolean)
@@ -428,10 +429,18 @@ function plainCommandPayload(payload) {
   return responsePayload;
 }
 
+function scheduleMessageDeletion(message) {
+  if (!message || typeof message.delete !== 'function') return;
+  const timer = setTimeout(() => {
+    message.delete().catch(() => {});
+  }, config.commandAutoDeleteMs);
+  timer.unref?.();
+}
+
 async function sendCommandResponse(message, payload) {
-  const deletePromise = message.delete().catch(() => {});
   const response = await message.channel.send(plainCommandPayload(payload));
-  void deletePromise;
+  scheduleMessageDeletion(message);
+  scheduleMessageDeletion(response);
   return response;
 }
 
@@ -1259,7 +1268,7 @@ function helpCommandPayload(command, page = 1) {
   if (command === 'whitelist' || command === 'wl') {
     section('whitelist commands', ['whitelist add @user', 'whitelist user add <id>', 'whitelist user remove <id>', 'whitelist channel add <id>', 'whitelist category add <id>', 'whitelist role add <id>', 'whitelist list']);
   } else if (command === 'backup') {
-    section('backup commands', ['backup create [reason]', 'backup list [count]', 'backup latest', 'backup inspect <file>', 'backup delete <file>']);
+    section('backup commands', ['backup create [reason]', 'backup list [count]', 'backup latest', 'backup inspect <file>', 'backup diff <file>', 'backup export <file>', 'backup delete <file>']);
   } else if (command === 'admin') {
     section('admin commands', ['admin add <id>', 'admin remove <id>', 'admin list', 'admin test']);
   } else if (command === 'audit' || command === 'logs') {
@@ -1867,6 +1876,43 @@ function readServerBackup(guildId, fileName) {
   }
 }
 
+function resolveBackupFileName(guildId, args) {
+  const firstArg = args.shift();
+  if (String(firstArg || '').toLowerCase() === 'latest') return listServerBackups(guildId)[0];
+  return [firstArg, ...args].filter(Boolean).join(' ');
+}
+
+function backupDiffSummary(guild, backup) {
+  const snapshotRoles = new Map((Array.isArray(backup.roles) ? backup.roles : []).filter((role) => role && role.id).map((role) => [role.id, role]));
+  const liveRoles = [...guild.roles.cache.values()];
+  const liveRoleIds = new Set(liveRoles.map((role) => role.id));
+  const addedRoles = liveRoles.filter((role) => !snapshotRoles.has(role.id));
+  const removedRoles = [...snapshotRoles.values()].filter((role) => !liveRoleIds.has(role.id));
+  const changedRoles = liveRoles.filter((role) => {
+    const saved = snapshotRoles.get(role.id);
+    return saved && (saved.name !== role.name || String(saved.permissions) !== role.permissions.bitfield.toString() || Boolean(saved.mentionable) !== Boolean(role.mentionable));
+  });
+
+  const snapshotChannels = new Map((Array.isArray(backup.channels) ? backup.channels : []).filter((channel) => channel && channel.id).map((channel) => [channel.id, channel]));
+  const liveChannels = [...guild.channels.cache.values()];
+  const liveChannelIds = new Set(liveChannels.map((channel) => channel.id));
+  const addedChannels = liveChannels.filter((channel) => !snapshotChannels.has(channel.id));
+  const removedChannels = [...snapshotChannels.values()].filter((channel) => !liveChannelIds.has(channel.id));
+  const changedChannels = liveChannels.filter((channel) => {
+    const saved = snapshotChannels.get(channel.id);
+    return saved && (saved.name !== channel.name || saved.type !== channel.type || saved.parentId !== channel.parentId || (saved.topic || null) !== (channel.topic || null) || Number(saved.rateLimitPerUser || 0) !== Number(channel.rateLimitPerUser || 0));
+  });
+  const names = (items) => items.slice(0, 5).map((item) => item.name || item.id).join(', ') || 'none';
+  return [
+    'Roles: +' + addedRoles.length + ' added, -' + removedRoles.length + ' removed, ' + changedRoles.length + ' changed',
+    'Channels: +' + addedChannels.length + ' added, -' + removedChannels.length + ' removed, ' + changedChannels.length + ' changed',
+    'Added roles: ' + names(addedRoles),
+    'Removed roles: ' + names(removedRoles),
+    'Added channels: ' + names(addedChannels),
+    'Removed channels: ' + names(removedChannels),
+  ].join('\n');
+}
+
 function backupSummary(fileName, backup, index) {
   const roles = Array.isArray(backup.roles) ? backup.roles.length : 0;
   const channels = Array.isArray(backup.channels) ? backup.channels.length : 0;
@@ -1918,18 +1964,46 @@ async function handleBackupCommand(message, args) {
     return;
   }
 
+  if (action === 'diff' || action === 'compare') {
+    const requestedFile = resolveBackupFileName(message.guild.id, args);
+    const entry = requestedFile && readServerBackup(message.guild.id, requestedFile);
+    if (!entry) {
+      await sendCommandResponse(message, 'Backup file not found or unreadable. Use ' + config.prefix + 'backup list first.');
+      return;
+    }
+    await sendCommandResponse(message, 'Backup comparison\n' + backupSummary(entry.fileName, entry.backup) + '\n' + backupDiffSummary(message.guild, entry.backup));
+    return;
+  }
+
+  if (action === 'export' || action === 'download') {
+    const requestedFile = resolveBackupFileName(message.guild.id, args);
+    const entry = requestedFile && readServerBackup(message.guild.id, requestedFile);
+    if (!entry) {
+      await sendCommandResponse(message, 'Backup file not found or unreadable. Use ' + config.prefix + 'backup list first.');
+      return;
+    }
+    try {
+      const response = await message.channel.send({
+        content: 'Backup export: ' + entry.fileName,
+        files: [{ attachment: entry.filePath, name: entry.fileName }],
+      });
+      scheduleMessageDeletion(message);
+      scheduleMessageDeletion(response);
+    } catch (error) {
+      await sendCommandResponse(message, 'Could not export backup: ' + error.message);
+    }
+    return;
+  }
+
   if (action === 'inspect' || action === 'info') {
-    const firstFileArg = args.shift();
-    const requestedFile = (firstFileArg || '').toLowerCase() === 'latest'
-      ? listServerBackups(message.guild.id)[0]
-      : [firstFileArg, ...args].filter(Boolean).join(' ');
+    const requestedFile = resolveBackupFileName(message.guild.id, args);
     const entry = requestedFile && readServerBackup(message.guild.id, requestedFile);
     if (!entry) {
       await sendCommandResponse(message, 'Backup file not found or unreadable. Use ' + config.prefix + 'backup list first.');
       return;
     }
     const backup = entry.backup;
-    await sendCommandResponse(message, 'Backup details\n' + backupSummary(entry.fileName, backup) + '\nReason: ' + (backup.reason || 'not recorded') + '\nGuild: ' + (backup.guild?.name || message.guild.name) + ' (' + message.guild.id + ')');
+    await sendCommandResponse(message, 'Backup details\n' + backupSummary(entry.fileName, backup) + '\nSchema: ' + (backup.schemaVersion || 'legacy') + '\nReason: ' + (backup.reason || 'not recorded') + '\nGuild: ' + (backup.guild?.name || message.guild.name) + ' (' + message.guild.id + ')');
     return;
   }
 
@@ -1949,7 +2023,7 @@ async function handleBackupCommand(message, args) {
     return;
   }
 
-  await sendCommandResponse(message, 'Use ' + config.prefix + 'backup create [reason], ' + config.prefix + 'backup list [count], ' + config.prefix + 'backup latest, ' + config.prefix + 'backup inspect <file>, or ' + config.prefix + 'backup delete <file>.');
+  await sendCommandResponse(message, 'Use ' + config.prefix + 'backup create [reason], ' + config.prefix + 'backup list [count], ' + config.prefix + 'backup latest, ' + config.prefix + 'backup inspect <file>, ' + config.prefix + 'backup diff <file>, ' + config.prefix + 'backup export <file>, or ' + config.prefix + 'backup delete <file>.');
 }
 
 client.once('ready', async () => {
@@ -2274,7 +2348,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 }
 
 if (!config.token) {
-  console.error('Missing DISCORD_TOKEN. Copy .env.example to .env and add your bot token.');
+  console.error('Missing DISCORD_TOKEN. Add it to Railway Variables or to a local .env file before starting the bot.');
   process.exitCode = 1;
 } else {
   client.login(config.token).catch((error) => {

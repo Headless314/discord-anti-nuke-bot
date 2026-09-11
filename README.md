@@ -55,7 +55,7 @@ The bot cannot remove a role above its highest role. It cannot undo already-dele
    npm install
    ~~~
 
-5. Copy `.env.example` to `.env` and set `DISCORD_TOKEN`.
+5. For local hosting, copy `.env.example` to `.env` and set `DISCORD_TOKEN`. On Railway, do not upload a `.env` file; add the variables from `.env.example` under the service's **Variables** tab. Railway injects them into `process.env` automatically.
 6. Start the bot:
 
    ~~~sh
@@ -139,6 +139,8 @@ Configured `>admin add <id>` recipients receive threshold risk alerts and alerts
 - `>backup list [count]` - List the newest backups with timestamps and role/channel counts.
 - `>backup latest` - Show the newest backup.
 - `>backup inspect <file>` - Inspect a saved backup's metadata.
+- `>backup diff <file>` - Compare the saved structure with the current server.
+- `>backup export <file>` - Download the JSON backup file.
 - `>backup delete <file>` - Delete a backup; server-owner only.
 
 The bot automatically keeps the newest 25 backups per server. Backups are structure snapshots only; they do not restore messages or members automatically.
@@ -167,13 +169,15 @@ Supported threshold types are `channel-delete`, `channel-create`, `role-delete`,
 
 Use dry-run mode before changing thresholds in a live server. It continues to record risk and create configured backups, but it does not remove roles.
 
-Backups include guild metadata, roles, role permissions, channels, categories, positions, topics, slowmode, and channel permission overwrites. Discord bot backups do not include message history, member private data, tokens, or a guaranteed one-command restore. The bot keeps the newest 25 backups per server.
+Backups include guild metadata, roles, role permissions, channels, categories, positions, topics, slowmode, and channel permission overwrites. `backup diff` reports added, removed, and changed roles/channels; `backup export` downloads the raw JSON snapshot. Discord bot backups do not include message history, member private data, tokens, or a guaranteed one-command restore. The bot keeps the newest 25 backups per server.
 
 ## Configuration
 
 - `COMMAND_PREFIX`: startup default is `>`. The server owner can change it at runtime with `>prefix x`; command parsing and generated help/error messages use the new value everywhere, including whitelist help.
 - `HELP_BANNER_FILE`: banner file loaded above help commands; defaults to `help-banner.txt`. Edit that file to replace the supplied ASCII art.
 - `HELP_BANNER`: optional inline banner override; use `\n` for line breaks.
+- `COMMAND_AUTO_DELETE_MS`: deletes each command and bot response after 60 seconds by default; set to another value in milliseconds if needed.
+- All normal command output is rendered in yellow ANSI text.
 - `HELP_COMMAND_ICON`: optional marker displayed before help commands; defaults to `🙏🏻`. Set it blank to remove the marker.
 - `NUKE_WINDOW_MS`: counting window in milliseconds; defaults to `30000`.
 - `AUTO_BACKUP_ON_RISK`: create a structure backup before mitigation; defaults to `true`.
