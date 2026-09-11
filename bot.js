@@ -388,6 +388,15 @@ function diffBlock(lines) {
     .join('\n') + '\n' + tick;
 }
 
+function plainDiffBlock(lines, rawLineCount = 0) {
+  const tick = String.fromCharCode(96).repeat(3);
+  const withConfiguredPrefix = (line) => String(line).replace(/>(?=[a-z])/gi, config.prefix);
+  return tick + 'diff\n' + lines
+    .filter((line) => line !== undefined && line !== null)
+    .map((line, index) => index < rawLineCount ? String(line) : '- ' + withConfiguredPrefix(line))
+    .join('\n') + '\n' + tick;
+}
+
 function plainCommandPayload(payload) {
   if (payload && payload.__raw) {
     const { __raw, ...rawPayload } = payload;
@@ -1230,32 +1239,10 @@ async function recordActivity({
       getGuildSettings(guild.id).punishments[type],
     );
   }
-  await notifyAdmins(guild, reason, executor.id, backup && backup.fileName);
-}
-
-function helpCommand(command) {
-  return helpCommandIcon + config.prefix + command;
-}
-
-function helpGrid(commands) {
-  const values = commands.map(helpCommand);
-  const rows = [];
-  for (let index = 0; index < values.length; index += 2) {
-    const left = values[index];
-    const right = values[index + 1];
-    rows.push(right ? left.padEnd(26, ' ') + right : left);
-  }
-  return rows;
-}
-
-function helpCommandPayload(command, page = 1) {
-  const fields = [];
-  const section = (title, commands) => {
-    fields.push({
-      name: title.toUpperCase(),
-      value: commands.map(helpCommand).join('\n'),
-      inline: false,
-    });
+  await notifyAdmins(guild, reason, executor.id, bfunction helpCommandPayload(command, page = 1) {
+  const helpCommands = [];
+  const section = (_title, commands) => {
+    helpCommands.push(...commands);
   };
 
   if (command === 'whitelist' || command === 'wl') {
@@ -1283,12 +1270,13 @@ function helpCommandPayload(command, page = 1) {
     section('detailed help', ['help whitelist', 'help backup', 'help admin', 'help audit', 'help config', 'help utility']);
   }
 
-  const embed = new DiscordEmbedBuilder()
-    .setTitle('help')
-    .setDescription(helpBanner || 'command list')
-    .addFields(fields)
-    .setFooter({ text: 'page ' + page + ' of 2' });
-  return { __raw: true, embeds: [embed], components: command ? [] : helpNavigation(page) };
+  const bannerLines = helpBanner ? helpBanner.split(/\r?\n/).filter((line) => line.length > 0) : [];
+  const contentLines = bannerLines.concat(helpGrid(helpCommands));
+  return {
+    __raw: true,
+    content: plainDiffBlock(contentLines, bannerLines.length),
+    components: command ? [] : helpNavigation(page),
+  };
 }
 
 function helpEmbed(command, page = 1) {
