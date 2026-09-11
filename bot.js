@@ -237,10 +237,19 @@ const mediaRotationErrors = { avatar: null, banner: null };
 
 function getMediaRotation(kind) {
   const saved = settings.__rotatingMedia && settings.__rotatingMedia[kind];
-  if (Array.isArray(saved)) return { items: saved, index: 0 };
+  if (Array.isArray(saved)) {
+    return {
+      items: saved
+        .filter((item) => item && typeof item.path === 'string')
+        .map((item) => ({ ...item, kind: item.kind || kind })),
+      index: 0,
+    };
+  }
   if (!saved || !Array.isArray(saved.items)) return { items: [], index: 0 };
   return {
-    items: saved.items.filter((item) => item && typeof item.path === 'string'),
+    items: saved.items
+      .filter((item) => item && typeof item.path === 'string')
+      .map((item) => ({ ...item, kind: item.kind || kind })),
     index: Number.isInteger(saved.index) && saved.index >= 0 ? saved.index : 0,
   };
 }
@@ -269,7 +278,9 @@ function mediaExtension(attachment) {
 async function applyRotatingMedia(kind) {
   if (!client.user) return false;
   const rotation = getMediaRotation(kind);
-  const items = rotation.items.filter((item) => getMediaPath(item) && fs.existsSync(getMediaPath(item)));
+  const items = rotation.items.filter((item) =>
+    item.kind === kind && getMediaPath(item) && fs.existsSync(getMediaPath(item)),
+  );
   if (!items.length) {
     mediaRotationErrors[kind] = 'no saved images';
     return false;
@@ -311,11 +322,12 @@ async function startMediaRotation(kind) {
 
 function lastMediaCommandTimestamp(messages, message, kind) {
   let timestamp = -1;
-  const commandText = config.prefix + kind;
+  const mediaCommands = [config.prefix + 'pfp', config.prefix + 'avatar', config.prefix + 'banner']
+    .map((command) => command.toLowerCase());
   for (const candidate of messages) {
     if (candidate.id === message.id || candidate.author.id !== message.author.id) continue;
     const firstToken = String(candidate.content || '').trim().split(/\s+/)[0].toLowerCase();
-    if (firstToken === commandText.toLowerCase()) timestamp = Math.max(timestamp, candidate.createdTimestamp);
+    if (mediaCommands.includes(firstToken)) timestamp = Math.max(timestamp, candidate.createdTimestamp);
   }
   return timestamp;
 }
@@ -348,7 +360,11 @@ async function saveRotatingMediaFromDm(message, kind) {
       if (!response.ok) throw new Error('Attachment download returned HTTP ' + response.status);
       const filePath = path.join(directory, Date.now() + '-' + index + '.' + mediaExtension(attachment));
       fs.writeFileSync(filePath, Buffer.from(await response.arrayBuffer()), { mode: 0o600 });
-      savedItems.push({ path: path.relative(__dirname, filePath), name: attachment.name || 'image' });
+      savedItems.push({
+        kind,
+        path: path.relative(__dirname, filePath),
+        name: attachment.name || 'image',
+      });
     }
 
     const oldRotation = getMediaRotation(kind);
@@ -446,6 +462,21 @@ async function sendCommandResponse(message, payload) {
   scheduleMessageDeletion(message);
   scheduleMessageDeletion(response);
   return response;
+}
+
+async function sendDashboardLink(message) {
+  const allowed = message.guild
+    ? isGuildOwner(message)
+    : Boolean(config.ownerUserId && message.author.id === config.ownerUserId);
+  if (!allowed) {
+    await sendCommandResponse(message, 'this command is owner-only.');
+    return;
+  }
+  if (!dashboardPublicUrl) {
+    await sendCommandResponse(message, 'the dashboard link is not available yet. Check the bot logs for the dashboard URL.');
+    return;
+  }
+  await sendCommandResponse(message, dashboardPublicUrl);
 }
 
 async function advanceRotatingMedia(message, kind) {
@@ -2075,6 +2106,8 @@ async function handleBackupCommand(message, args) {
   await sendCommandResponse(message, 'Use ' + config.prefix + 'backup create [reason], ' + config.prefix + 'backup list [count], ' + config.prefix + 'backup latest, ' + config.prefix + 'backup inspect <file>, ' + config.prefix + 'backup diff <file>, ' + config.prefix + 'backup verify <file>, ' + config.prefix + 'backup stats, ' + config.prefix + 'backup export <file>, or ' + config.prefix + 'backup delete <file>.');
 }
 
+let dashboardPublicUrl = null;
+
 const dashboardDependencies = {
   client,
   config,
@@ -2087,6 +2120,9 @@ const dashboardDependencies = {
   getBackupPath,
   backupDirectory,
   dashboardActivity,
+  setDashboardUrl: (url) => {
+    dashboardPublicUrl = String(url || '').trim() || null;
+  },
 };
 
 function startOwnerDashboard() {
@@ -2313,6 +2349,8 @@ client.on('messageCreate', async (message) => {
     settings.__commandPrefix = nextPrefix;
     saveSettings();
     await sendCommandResponse(message, 'Command prefix changed to ' + nextPrefix + '. Use ' + nextPrefix + 'help to see every command.');
+  } else if (command === 'link') {
+    await sendDashboardLink(message);
   } else if (command === 'next') {
     const mediaKind = args.shift()?.toLowerCase();
     if (mediaKind === 'pfp' || mediaKind === 'avatar') await advanceRotatingMedia(message, 'avatar');
