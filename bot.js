@@ -376,11 +376,6 @@ async function saveRotatingMediaFromDm(message, kind) {
   }
 }
 
-function helpAnsiBlock(lines) {
-  const tick = String.fromCharCode(96).repeat(3);
-  return tick + 'ansi\n' + lines.filter((line) => line !== undefined && line !== null).join('\n') + '\n' + tick;
-}
-
 function diffBlock(lines) {
   const tick = String.fromCharCode(96).repeat(3);
   const ansiColors = ['33']; // green, yellow, violet, red
@@ -1254,15 +1249,13 @@ function helpGrid(commands) {
 }
 
 function helpCommandPayload(command, page = 1) {
-  const lines = [];
-  if (helpBanner) {
-    lines.push(...helpBanner.split(/\r?\n/));
-    lines.push('');
-  }
+  const fields = [];
   const section = (title, commands) => {
-    lines.push(title.toUpperCase());
-    lines.push(...helpGrid(commands));
-    lines.push('');
+    fields.push({
+      name: title.toUpperCase(),
+      value: commands.map(helpCommand).join('\n'),
+      inline: false,
+    });
   };
 
   if (command === 'whitelist' || command === 'wl') {
@@ -1290,8 +1283,11 @@ function helpCommandPayload(command, page = 1) {
     section('detailed help', ['help whitelist', 'help backup', 'help admin', 'help audit', 'help config', 'help utility']);
   }
 
-  while (lines.at(-1) === '') lines.pop();
-  const embed = new DiscordEmbedBuilder().setDescription(helpAnsiBlock(lines));
+  const embed = new DiscordEmbedBuilder()
+    .setTitle('help')
+    .setDescription(helpBanner || 'command list')
+    .addFields(fields)
+    .setFooter({ text: 'page ' + page + ' of 2' });
   return { __raw: true, embeds: [embed], components: command ? [] : helpNavigation(page) };
 }
 
@@ -2206,7 +2202,8 @@ client.on('interactionCreate', async (interaction) => {
     if (!interaction.inGuild() || !interaction.isButton()) return;
     if (!interaction.customId.startsWith('help:page:')) return;
     const page = interaction.customId.endsWith(':2') ? 2 : 1;
-    await interaction.update(helpCommandPayload(null, page));
+    const nextPagePayload = plainCommandPayload(helpCommandPayload(null, page));
+    await interaction.update(nextPagePayload);
   } catch (error) {
     console.error('Interaction handling error:', error.message);
     if (interaction.deferred || interaction.replied) return;
