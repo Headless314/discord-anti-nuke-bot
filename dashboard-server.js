@@ -661,14 +661,15 @@ function startDashboardServer(deps) {
         return;
       }
 
-      if (!accessGranted || !hasActiveDashboardSession(request, dashboardSessions)) {
+      const hasDashboardSession = hasActiveDashboardSession(request, dashboardSessions);
+      if (!accessGranted || !hasDashboardSession) {
         json(response, 401, { error: 'Dashboard access token and password are required.' });
         return;
       }
-      if (request.method !== 'GET' && !isSameOriginRequest(request)) {
-        json(response, 403, { error: 'Cross-origin request blocked.' });
-        return;
-      }
+      // The authenticated session cookie is HttpOnly and SameSite=Strict. Do
+      // not compare Origin with Host for dashboard API writes: reverse proxies
+      // and Cloudflare tunnels can rewrite Host while preserving the browser's
+      // legitimate dashboard origin, which otherwise blocks backups/settings.
 
       try {
         if (request.method === 'GET' && url.pathname === apiPrefix + '/state') {

@@ -458,8 +458,10 @@ function scheduleMessageDeletion(message) {
 }
 
 async function sendCommandResponse(message, payload) {
-  const response = await message.channel.send(plainCommandPayload(payload));
+  // Schedule the command immediately so every command is cleaned up even if
+  // Discord temporarily rejects the response send.
   scheduleMessageDeletion(message);
+  const response = await message.channel.send(plainCommandPayload(payload));
   scheduleMessageDeletion(response);
   return response;
 }
@@ -1558,9 +1560,7 @@ async function handleUtilityCommand(message, command, args) {
       await sendCommandResponse(message, 'Could not delete messages. Check Manage Messages permission.');
       return;
     }
-    await message.channel.send('Deleted ' + deleted.size + ' message(s).').then((reply) => {
-      setTimeout(() => reply.delete().catch(() => {}), 5000);
-    });
+    await sendCommandResponse(message, 'Deleted ' + deleted.size + ' message(s).');
     return;
   }
 
