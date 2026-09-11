@@ -565,6 +565,7 @@ function startDashboardServer(deps) {
   const configuredDashboardUrl = buildDashboardUrl(configuredUrl, dashboardToken, dashboardPort)
     || buildDashboardHostUrl(configuredHost, dashboardToken, dashboardPort)
     || buildDashboardUrl('http://127.0.0.1:' + dashboardPort, dashboardToken, dashboardPort);
+  deps.setDashboardUrl?.(configuredDashboardUrl);
   const hasRemoteUrl = Boolean(buildDashboardUrl(configuredUrl, dashboardToken, dashboardPort) || buildDashboardHostUrl(configuredHost, dashboardToken, dashboardPort));
   const dashboardSessions = new Map();
   const loginAttempts = new Map();
@@ -685,6 +686,7 @@ function startDashboardServer(deps) {
             return;
           }
           if (request.method === 'GET' && !whitelistMatch[2]) {
+            await guild.members.fetch().catch(() => null);
             const settings = deps.getGuildSettings(guildId);
             json(response, 200, {
               whitelist: whitelistKeys.reduce((result, key) => {
@@ -801,6 +803,7 @@ function startDashboardServer(deps) {
             // Print the link immediately so a host with restricted DNS does not
             // hide a usable tunnel while the optional self-check is running.
             console.log('Owner dashboard (Cloudflare): ' + tunnelUrl);
+            deps.setDashboardUrl?.(tunnelUrl);
             waitForPublicDashboard(tunnelUrl).then((reachable) => {
               if (!reachable) {
                 console.warn('Cloudflare created a URL, but the dashboard did not respond after 30 seconds.');
