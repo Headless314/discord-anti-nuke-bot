@@ -1289,7 +1289,7 @@ function helpCommandPayload(command, page = 1) {
 function helpEmbed(command, page = 1) {
   const commandList = (...commands) => {
     const tick = String.fromCharCode(96).repeat(3);
-    return tick + 'diff\n' + commands.map((value) => '- ' + value).join('\n') + '\n' + tick;
+    return tick + 'diff\n' + commands.map((value) => '- ' + value.replace(/^>/, config.prefix)).join('\n') + '\n' + tick;
   };
   const embed = new EmbedBuilder();
 
@@ -1870,7 +1870,8 @@ function readServerBackup(guildId, fileName) {
 function backupSummary(fileName, backup, index) {
   const roles = Array.isArray(backup.roles) ? backup.roles.length : 0;
   const channels = Array.isArray(backup.channels) ? backup.channels.length : 0;
-  const createdAt = backup.createdAt ? new Date(backup.createdAt).toISOString() : 'unknown date';
+  const parsedDate = backup.createdAt ? Date.parse(backup.createdAt) : Number.NaN;
+  const createdAt = Number.isFinite(parsedDate) ? new Date(parsedDate).toISOString() : 'unknown date';
   return (index === undefined ? '' : (index + 1) + '. ') + fileName + '\n   ' + createdAt + ' | ' + roles + ' roles | ' + channels + ' channels';
 }
 
