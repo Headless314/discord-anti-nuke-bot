@@ -1239,7 +1239,25 @@ async function recordActivity({
       getGuildSettings(guild.id).punishments[type],
     );
   }
-  await notifyAdmins(guild, reason, executor.id, bfunction helpCommandPayload(command, page = 1) {
+  await notifyAdmins(guild, reason, executor.id, backup && backup.fileName);
+}
+
+function helpCommand(command) {
+  return helpCommandIcon + config.prefix + command;
+}
+
+function helpGrid(commands) {
+  const values = commands.map(helpCommand);
+  const rows = [];
+  for (let index = 0; index < values.length; index += 2) {
+    const left = values[index];
+    const right = values[index + 1];
+    rows.push(right ? left.padEnd(26, ' ') + right : left);
+  }
+  return rows;
+}
+
+function helpCommandPayload(command, page = 1) {
   const helpCommands = [];
   const section = (_title, commands) => {
     helpCommands.push(...commands);
