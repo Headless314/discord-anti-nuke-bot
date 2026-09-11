@@ -11,7 +11,6 @@ const {
   PermissionFlagsBits,
   Partials,
 } = require('discord.js');
-const { spawn } = require('node:child_process');
 const dotenv = require('dotenv');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -488,56 +487,6 @@ async function handleGuildAutoDeleteCommand(message, args) {
     return;
   }
   await sendCommandResponse(message, 'use >autodelete user @target, >autodelete remove @target, >autodelete list, or >autodelete clear.');
-}
-function runMaigret(username) {
-  return new Promise((resolve, reject) => {
-    const binary = process.env.MAIGRET_COMMAND || 'maigret';
-    const child = spawn(binary, [username, '-a', '--print-found', '--timeout', '10'], { env: process.env });
-    let output = '';
-    let errors = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      reject(new Error('scan timed out after 120 seconds'));
-    }, 120000);
-    child.stdout.on('data', (chunk) => { output += chunk.toString(); });
-    child.stderr.on('data', (chunk) => { errors += chunk.toString(); });
-    child.on('error', (error) => { clearTimeout(timer); reject(error); });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code !== 0 && !output.trim()) reject(new Error(errors.trim() || 'maigret exited with code ' + code));
-      else resolve(output || errors || 'no output');
-    });
-  });
-}
-
-function formatMaigretOutput(output) {
-  const clean = String(output).replace(/\u001b/g, '');
-  const lines = clean.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const useful = lines.filter((line) => /https?:\/\/|found|not found|error|scan|site/i.test(line));
-  const selected = (useful.length ? useful : lines).slice(0, 80);
-  const text = selected.join('\n') || 'no public matches found';
-  return text.length > 1600 ? text.slice(0, 1600) + '\n... results truncated' : text;
-}
-
-async function handleMaigretCommand(message, args) {
-  if (!isGuildOwner(message)) {
-    await sendCommandResponse(message, 'this command is server-owner only.');
-    return;
-  }
-  const username = String(args.shift() || "").trim();
-  if (!/^[a-zA-Z0-9._-]{1,64}$/.test(username)) {
-    await sendCommandResponse(message, 'use >x username.');
-    return;
-  }
-  const deletePromise = message.delete().catch(() => {});
-  const progress = await message.channel.send(diffBlock(['maigret scan started for ' + username + '...']));
-  void deletePromise;
-  try {
-    const output = await runMaigret(username);
-    await progress.edit({ content: diffBlock(['maigret scan complete for ' + username, formatMaigretOutput(output)]) });
-  } catch (error) {
-    await progress.edit({ content: diffBlock(['maigret scan failed: ' + error.message, 'install it with: pip install maigret']) }).catch(() => {});
-  }
 }
 async function handleDirectMessageCommand(message) {
   if (!config.ownerUserId || message.author.id !== config.ownerUserId) return;
@@ -2108,8 +2057,6 @@ client.on('messageCreate', async (message) => {
     settings.__commandPrefix = nextPrefix;
     saveSettings();
     await sendCommandResponse(message, 'Command prefix changed to ' + nextPrefix + '. Use ' + nextPrefix + 'help to see every command.');
-  } else if (command === 'x') {
-    await handleMaigretCommand(message, args);
   } else if (command === 'next') {
     const mediaKind = args.shift()?.toLowerCase();
     if (mediaKind === 'pfp' || mediaKind === 'avatar') await advanceRotatingMedia(message, 'avatar');
