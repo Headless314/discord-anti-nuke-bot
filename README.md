@@ -214,3 +214,61 @@ The dashboard still requires `DASHBOARD_PASSWORD`. Quick Tunnel URLs are tempora
 Whitelist entries and dashboard settings are saved immediately to `data/settings.json` using an atomic file replacement, so they survive normal restarts. Make sure the hosting provider keeps the `data/` directory on persistent storage when redeploying.
 
 Keep `.env` and `data/settings.json` private.
+## Automatic channel restore (v1.3.0)
+
+### Faster reaction to mass deletions
+
+Detection now runs off Discord's `guildAuditLogEntryCreate` gateway event, which
+fires the moment the audit log entry is written. Previously the bot waited for
+the `channelDelete` event and then polled the audit log REST endpoint with
+500 ms gaps between three attempts, which is why it reacted seconds late during a
+nuke. The old path is kept as a fallback, and duplicate events are ignored so
+counts stay accurate.
+
+Log embeds are also no longer awaited before punishment is applied, and the
+default `CHANNEL_DELETE_THRESHOLD` is now `4`.
+
+### Channel layout snapshots
+
+The bot keeps a live snapshot of every server's channel tree in
+`data/layouts/<guildId>.json`. It is written on startup and refreshed whenever
+channels are created or edited — never during a mass deletion or a restore, so a
+nuke cannot overwrite a good snapshot.
+
+### Restore behaviour
+
+When the channel-delete threshold is hit, the bot punishes the attacker and then
+rebuilds the channel tree from the snapshot:
+
+- Categories are recreated first, then channels, in their original order.
+- A channel that still exists — same id, or same name in the same category — is
+  left completely untouched. No duplicates are ever created.
+- Permission overwrites are restored for roles and members that still exist.
+- After the run, channel positions are pushed back to the snapshot order and the
+  snapshot is rewritten with the new ids, so the stored list always matches the
+  live server.
+- Restores are rate-limit friendly (300 ms between creates, 120 channels max per
+  run) and guarded by a per-guild lock and cooldown.
+
+### Commands
+
+| Command | Description |
+| --- | --- |
+| `>restore save` | Save the current channel layout right now |
+| `>restore status` | Show the saved layout and whether auto restore is on |
+| `>restore run` | Rebuild missing channels immediately |
+| `>restore export` | Download the layout snapshot as a JSON file |
+| `>restore on` / `>restore off` | Toggle automatic restore for this server |
+
+`>backup export` already sends any saved backup snapshot as a downloadable file.
+
+### Environment variables
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `AUTO_RESTORE_CHANNELS` | `true` | Rebuild channels automatically after a nuke |
+| `AUTO_RESTORE_COOLDOWN_MS` | `20000` | Minimum gap between automatic restores |
+| `CHANNEL_DELETE_THRESHOLD` | `4` | Deletions within the window that count as an attack |
+
+The bot needs **Manage Channels**, **Manage Roles**, and **View Audit Log**
+permissions, and the *Server Members* privileged intent, for restore to work.

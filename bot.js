@@ -15,6 +15,7 @@ const dotenv = require('dotenv');
 const fs = require('node:fs');
 const path = require('node:path');
 const { startDashboardServer } = require('./dashboard-server');
+const { createRestoreManager } = require('./channel-restore');
 
 const dotenvResult = dotenv.config({ path: path.join(__dirname, '.env') });
 if (dotenvResult.error && dotenvResult.error.code !== 'ENOENT') {
@@ -114,7 +115,7 @@ const config = {
   autoBackupOnRisk: booleanFromEnv('AUTO_BACKUP_ON_RISK', true),
   commandAutoDeleteMs: numberFromEnv('COMMAND_AUTO_DELETE_MS', 30_000, 1_000),
   thresholds: {
-    channel_delete: numberFromEnv('CHANNEL_DELETE_THRESHOLD', 5),
+    channel_delete: numberFromEnv('CHANNEL_DELETE_THRESHOLD', 4),
     channel_create: numberFromEnv('CHANNEL_CREATE_THRESHOLD', 5),
     role_delete: numberFromEnv('ROLE_DELETE_THRESHOLD', 5),
     role_create: numberFromEnv('ROLE_CREATE_THRESHOLD', 5),
@@ -134,6 +135,10 @@ const settingsFile = path.join(dataDirectory, 'settings.json');
 const runtimeFile = path.join(dataDirectory, 'runtime.json');
 const backupDirectory = path.join(dataDirectory, 'backups');
 const maxBackupsPerGuild = 25;
+const layoutDirectory = path.join(dataDirectory, 'layouts');
+const restoreManager = createRestoreManager({ dataDirectory, logger: console });
+const autoRestoreEnabledByDefault = booleanFromEnv('AUTO_RESTORE_CHANNELS', true);
+const autoRestoreCooldownMs = numberFromEnv('AUTO_RESTORE_COOLDOWN_MS', 20_000, 1_000);
 const helpBannerFile = path.join(__dirname, process.env.HELP_BANNER_FILE || 'help-banner.txt');
 const helpCommandIcon = String(process.env.HELP_COMMAND_ICON || '🙏🏻').trim();
 
@@ -638,6 +643,9 @@ function getGuildSettings(guildId) {
       ? Math.min(guildSettings.windowMs, 3_600_000)
       : config.windowMs;
   guildSettings.autoBackupOnRisk = guildSettings.autoBackupOnRisk !== false;
+  if (typeof guildSettings.autoRestore !== 'boolean') {
+    guildSettings.autoRestore = autoRestoreEnabledByDefault;
+  }
   guildSettings.thresholds = guildSettings.thresholds || {};
   for (const type of Object.keys(config.thresholds)) {
     if (
@@ -793,21 +801,77 @@ async function logAction(guild, title, description, color = 0x050505) {
   await sendOwnerMessage(guild, { embeds: [embed] });
 }
 
+/*
+ * Audit log entries arrive over the gateway (guildAuditLogEntryCreate) at the
+ * same moment the action happens. Caching the executor from that event means we
+ * almost never have to poll the audit log REST endpoint, which is what used to
+ * make the bot react seconds late during a mass deletion.
+ */
+const auditExecutorCache = new Map();
+const auditExecutorTtlMs = 120_000;
+
+function auditCacheKey(action, targetId) {
+  return String(action) + ':' + String(targetId);
+}
+
+function cacheAuditExecutor(action, targetId, executorId) {
+  if (!targetId || !executorId) return;
+  auditExecutorCache.set(auditCacheKey(action, targetId), { executorId, at: Date.now() });
+  if (auditExecutorCache.size > 500) {
+    const cutoff = Date.now() - auditExecutorTtlMs;
+    for (const [key, value] of auditExecutorCache) {
+      if (value.at < cutoff) auditExecutorCache.delete(key);
+    }
+  }
+}
+
+function cachedAuditExecutorId(action, targetId) {
+  const hit = auditExecutorCache.get(auditCacheKey(action, targetId));
+  if (!hit) return null;
+  if (Date.now() - hit.at > auditExecutorTtlMs) {
+    auditExecutorCache.delete(auditCacheKey(action, targetId));
+    return null;
+  }
+  return hit.executorId;
+}
+
+async function resolveUser(userId) {
+  if (!userId) return null;
+  const cached = client.users.cache.get(userId);
+  if (cached) return cached;
+  try {
+    return await client.users.fetch(userId);
+  } catch {
+    return null;
+  }
+}
+
 async function findExecutor(guild, action, targetId) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  const cachedId = cachedAuditExecutorId(action, targetId);
+  if (cachedId) {
+    const user = await resolveUser(cachedId);
+    if (user) return user;
+  }
+
+  // Fallback: the gateway event has not landed yet. Poll quickly rather than
+  // waiting half a second between attempts.
+  for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
       const auditLogs = await guild.fetchAuditLogs({ type: action, limit: 10 });
       const entry = auditLogs.entries.find((candidate) => {
         const isRecent = Date.now() - candidate.createdTimestamp < 15_000;
         return isRecent && candidate.target && candidate.target.id === targetId;
       });
-      if (entry && entry.executor) return entry.executor;
+      if (entry && entry.executor) {
+        cacheAuditExecutor(action, targetId, entry.executor.id);
+        return entry.executor;
+      }
     } catch (error) {
-      if (attempt === 2) {
+      if (attempt === 3) {
         console.error('Could not read audit log:', error.message);
       }
     }
-    if (attempt < 2) await wait(500);
+    if (attempt < 3) await wait(150);
   }
   return null;
 }
@@ -1207,6 +1271,29 @@ async function sendAdminTest(guild) {
   return sent;
 }
 
+/*
+ * The same action can reach us twice: once through the gateway audit log event
+ * (fast) and once through the entity event such as channelDelete (slower). We
+ * process whichever arrives first and ignore the duplicate, so counts stay
+ * accurate while reaction time stays instant.
+ */
+const processedRiskEvents = new Map();
+const processedRiskTtlMs = 120_000;
+
+function claimRiskEvent(type, targetId) {
+  if (!targetId) return true;
+  const key = type + ':' + targetId;
+  if (processedRiskEvents.has(key)) return false;
+  processedRiskEvents.set(key, Date.now());
+  if (processedRiskEvents.size > 1000) {
+    const cutoff = Date.now() - processedRiskTtlMs;
+    for (const [existing, at] of processedRiskEvents) {
+      if (at < cutoff) processedRiskEvents.delete(existing);
+    }
+  }
+  return true;
+}
+
 async function recordActivity({
   guild,
   target,
@@ -1217,11 +1304,15 @@ async function recordActivity({
   reason,
   color = 0xff6600,
   ignoreUnknown = false,
+  knownExecutorId = null,
 }) {
+  if (!claimRiskEvent(type, target && target.id)) return;
   addDashboardActivity(guild, title, details, color === 0xff6600 ? 'warning' : 'notice');
   if (!getGuildSettings(guild.id).enabled) return;
 
-  const executor = await findExecutor(guild, auditAction, target.id);
+  const executor = knownExecutorId
+    ? await resolveUser(knownExecutorId)
+    : await findExecutor(guild, auditAction, target.id);
   if (!executor) {
     if (ignoreUnknown) return;
     await logAction(
@@ -1238,12 +1329,14 @@ async function recordActivity({
 
   const count = trackActivity(executor.id, guild.id, type);
   const threshold = getThreshold(guild.id, type);
-  await logAction(
+  // Fire-and-forget: sending the log embed used to hold up the punishment by a
+  // full API round trip for every single deleted channel.
+  logAction(
     guild,
     title,
     details + '\nBy: <@' + executor.id + '>\nCount: ' + count + '/' + threshold,
     color,
-  );
+  ).catch((error) => console.error('Could not send activity log:', error.message));
 
   if (count < threshold) return;
 
@@ -1279,6 +1372,58 @@ async function recordActivity({
     );
   }
   await notifyAdmins(guild, reason, executor.id, backup && backup.fileName);
+
+  if (type === 'channel_delete' && !getGuildSettings(guild.id).dryRun) {
+    await runAutoRestore(guild, 'Auto restore after ' + reason);
+  }
+}
+
+/*
+ * Rebuilds the channel tree from the stored layout snapshot. Channels that are
+ * still present are skipped, so nothing is ever duplicated; the snapshot is
+ * rewritten afterwards so the saved list matches the live server.
+ */
+async function runAutoRestore(guild, reason) {
+  const guildSettings = getGuildSettings(guild.id);
+  if (guildSettings.autoRestore === false) return null;
+  if (restoreManager.isRestoring(guild.id)) return null;
+
+  const lastRun = restoreManager.lastRestoreAt.get(guild.id) || 0;
+  if (Date.now() - lastRun < autoRestoreCooldownMs) return null;
+
+  let result;
+  try {
+    result = await restoreManager.restoreGuild(guild, { reason });
+  } catch (error) {
+    console.error('Automatic channel restore failed:', error.message);
+    await logAction(guild, 'Channel restore failed', error.message, 0xed4245).catch(() => {});
+    return null;
+  }
+
+  if (result && result.skipped) {
+    await logAction(
+      guild,
+      'Channel restore skipped',
+      'Reason: ' + result.skipped + '\nRun ' + config.prefix + 'restore save once so the bot has a layout to rebuild from.',
+      0xff9900,
+    ).catch(() => {});
+    return result;
+  }
+
+  if (result && (result.created || result.failed)) {
+    addDashboardActivity(guild, 'Channels restored', 'Recreated ' + result.created + ' channel(s).', 'notice');
+    await logAction(
+      guild,
+      'Channels restored automatically',
+      'Recreated: ' + result.created +
+        '\nAlready present (left untouched): ' + result.kept +
+        '\nFailed: ' + result.failed +
+        (result.reordered ? '\nOriginal order restored.' : '') +
+        (result.errors.length ? '\n' + result.errors.join('\n') : ''),
+      0x57f287,
+    ).catch(() => {});
+  }
+  return result;
 }
 
 function helpCommand(command) {
@@ -1317,6 +1462,8 @@ function helpCommandPayload(command, page = 1) {
     section('utility commands', ['ping', 'serverinfo', 'userinfo [@user]', 'channelinfo [#channel]', 'roleinfo <@role>', 'purge <1-100>', 'slowmode <0-21600>', 'lockdown on|off|status']);
   } else if (command === 'config') {
     section('config commands', ['config show', 'config threshold <type> <number>', 'config window <seconds>', 'config backup on|off', 'config dry-run on|off']);
+  } else if (command === 'restore' || command === 'layout') {
+    section('restore commands', ['restore save', 'restore status', 'restore run', 'restore export', 'restore on', 'restore off']);
   } else if (page === 1) {
     section('commands', ['anti status', 'anti enable', 'anti disable', 'anti dry-run', 'anti reset', 'setup', 'status', 'anti status', 'next pfp', 'next banner', 'whitelist', 'admin', 'prefix x', 'prefix reset']);
   } else {
@@ -1417,6 +1564,7 @@ function helpEmbed(command, page = 1) {
 
   return embed.addFields(
     { name: 'backups', value: commandList('>backup create', '>backup list', '>backup inspect <file>') },
+    { name: 'channel restore', value: commandList('>restore save', '>restore status', '>restore run', '>restore export', '>restore on|off') },
     { name: 'utilities', value: commandList('>ping', '>serverinfo', '>userinfo', '>channelinfo', '>roleinfo', '>purge', '>slowmode', '>lockdown') },
     { name: 'configuration', value: commandList('>config show', '>config threshold <type> <number>', '>config window <seconds>', '>config backup on|off', '>config dry-run on|off', '>prefix x', '>prefix reset') },
     { name: 'detailed help', value: commandList('>help whitelist', '>help backup', '>help admin', '>help audit', '>help config', '>help utility') },
@@ -2143,6 +2291,15 @@ startOwnerDashboard();
 
 client.once('ready', async () => {
   console.log('Bot logged in as ' + client.user.tag);
+  // Capture the current channel tree immediately so a restore is always possible.
+  for (const guild of client.guilds.cache.values()) {
+    try {
+      await guild.channels.fetch();
+      restoreManager.snapshotGuild(guild);
+    } catch (error) {
+      console.error('Could not snapshot channels for ' + guild.id + ':', error.message);
+    }
+  }
   client.user.setPresence({ activities: [], status: botPresenceStatus });
   await startMediaRotation('avatar');
   await startMediaRotation('banner');
@@ -2201,6 +2358,86 @@ client.on('messageDeleteBulk', async (messages, channel) => {
   await sendOwnerMessage(channel.guild, { embeds: [embed] });
 });
 
+/*
+ * Primary detection path. This gateway event fires the instant Discord writes
+ * the audit log entry, so the bot counts and punishes immediately instead of
+ * waiting for the entity event and then polling the audit log.
+ */
+const auditRiskMap = {
+  [AuditLogEvent.ChannelDelete]: {
+    type: 'channel_delete',
+    title: 'Channel deleted',
+    reason: 'mass channel deletion',
+    label: (entry) => 'Channel: ' + (auditEntryName(entry) || entry.targetId),
+  },
+  [AuditLogEvent.ChannelCreate]: {
+    type: 'channel_create',
+    title: 'Channel created',
+    reason: 'mass channel creation',
+    color: 0x050505,
+    label: (entry) => 'Channel: <#' + entry.targetId + '>',
+  },
+  [AuditLogEvent.RoleDelete]: {
+    type: 'role_delete',
+    title: 'Role deleted',
+    reason: 'mass role deletion',
+    label: (entry) => 'Role: ' + (auditEntryName(entry) || entry.targetId),
+  },
+  [AuditLogEvent.RoleCreate]: {
+    type: 'role_create',
+    title: 'Role created',
+    reason: 'mass role creation',
+    color: 0x050505,
+    label: (entry) => 'Role: ' + (auditEntryName(entry) || entry.targetId),
+  },
+  [AuditLogEvent.MemberBanAdd]: {
+    type: 'ban',
+    title: 'Member banned',
+    reason: 'mass bans',
+    label: (entry) => 'Member: <@' + entry.targetId + '>',
+  },
+  [AuditLogEvent.MemberKick]: {
+    type: 'kick',
+    title: 'Member kicked',
+    reason: 'mass kicks',
+    label: (entry) => 'Member: <@' + entry.targetId + '>',
+  },
+};
+
+function auditEntryName(entry) {
+  const change = (entry.changes || []).find((candidate) => candidate.key === 'name');
+  if (change && (change.old !== undefined || change.new !== undefined)) {
+    return change.old !== undefined ? change.old : change.new;
+  }
+  return entry.target && entry.target.name ? entry.target.name : null;
+}
+
+client.on('guildAuditLogEntryCreate', async (entry, guild) => {
+  if (!guild || !entry.executorId) return;
+  cacheAuditExecutor(entry.action, entry.targetId, entry.executorId);
+
+  const mapped = auditRiskMap[entry.action];
+  if (!mapped || !entry.targetId) return;
+
+  const target =
+    guild.channels.cache.get(entry.targetId) ||
+    guild.roles.cache.get(entry.targetId) ||
+    (entry.target && entry.target.id ? entry.target : { id: entry.targetId });
+
+  await recordActivity({
+    guild,
+    target,
+    auditAction: entry.action,
+    type: mapped.type,
+    title: mapped.title,
+    details: mapped.label(entry),
+    reason: mapped.reason,
+    color: mapped.color === undefined ? 0xff6600 : mapped.color,
+    knownExecutorId: entry.executorId,
+  });
+});
+
+// Fallback for the rare case where the audit log event is missing or delayed.
 client.on('channelDelete', async (channel) => {
   if (!channel.guild) return;
   await recordActivity({
@@ -2214,8 +2451,14 @@ client.on('channelDelete', async (channel) => {
   });
 });
 
+client.on('channelUpdate', (oldChannel, newChannel) => {
+  if (!newChannel.guild) return;
+  restoreManager.scheduleSnapshot(newChannel.guild);
+});
+
 client.on('channelCreate', async (channel) => {
   if (!channel.guild) return;
+  restoreManager.scheduleSnapshot(channel.guild, 30_000);
   await recordActivity({
     guild: channel.guild,
     target: channel,
@@ -2434,10 +2677,91 @@ client.on('messageCreate', async (message) => {
     await handleAuditCommand(message, args);
   } else if (command === 'backup') {
     await handleBackupCommand(message, args);
+  } else if (command === 'restore' || command === 'layout') {
+    await handleRestoreCommand(message, args);
   } else {
     await sendCommandResponse(message, 'Unknown command. Use >help.');
   }
 });
+
+async function handleRestoreCommand(message, args) {
+  if (!message.guild) return;
+  if (!isAdministrator(message.member)) {
+    await sendCommandResponse(message, 'You need Administrator permission to use restore commands.');
+    return;
+  }
+
+  const action = (args.shift() || 'status').toLowerCase();
+  const guildSettings = getGuildSettings(message.guild.id);
+
+  if (action === 'save' || action === 'snapshot') {
+    const layout = restoreManager.snapshotGuild(message.guild);
+    await sendCommandResponse(message, 'Channel layout saved\nChannels stored: ' + layout.channels.length);
+    return;
+  }
+
+  if (action === 'status' || action === 'show') {
+    const summary = restoreManager.layoutSummary(message.guild.id);
+    await sendCommandResponse(message, summary
+      ? 'Channel layout\nSaved: ' + summary.updatedAt +
+        '\nCategories: ' + summary.categories +
+        '\nChannels: ' + summary.channels +
+        '\nAuto restore: ' + (guildSettings.autoRestore === false ? 'Disabled' : 'Enabled')
+      : 'No channel layout saved yet. Run ' + config.prefix + 'restore save.');
+    return;
+  }
+
+  if (action === 'on' || action === 'off') {
+    guildSettings.autoRestore = action === 'on';
+    saveSettings();
+    await sendCommandResponse(message, 'Automatic channel restore is now ' + (action === 'on' ? 'enabled' : 'disabled') + '.');
+    return;
+  }
+
+  if (action === 'export' || action === 'download') {
+    const summary = restoreManager.layoutSummary(message.guild.id);
+    if (!summary) {
+      await sendCommandResponse(message, 'No channel layout saved yet. Run ' + config.prefix + 'restore save.');
+      return;
+    }
+    try {
+      const response = await message.channel.send({
+        content: 'Channel layout export (' + summary.total + ' channels)',
+        files: [{ attachment: summary.filePath, name: summary.fileName }],
+      });
+      scheduleMessageDeletion(message);
+      scheduleMessageDeletion(response);
+    } catch (error) {
+      await sendCommandResponse(message, 'Could not export the layout: ' + error.message);
+    }
+    return;
+  }
+
+  if (action === 'run' || action === 'now' || action === 'channels') {
+    await sendCommandResponse(message, 'Rebuilding missing channels...');
+    const result = await restoreManager.restoreGuild(message.guild, {
+      reason: 'Manual restore by ' + message.author.tag,
+    });
+    if (result.skipped) {
+      await sendCommandResponse(message, 'Restore skipped: ' + result.skipped);
+      return;
+    }
+    await sendCommandResponse(message,
+      'Restore finished\nRecreated: ' + result.created +
+      '\nAlready present (ignored): ' + result.kept +
+      '\nFailed: ' + result.failed +
+      (result.reordered ? '\nOriginal order restored.' : '') +
+      (result.errors.length ? '\n' + result.errors.join('\n') : ''),
+    );
+    return;
+  }
+
+  await sendCommandResponse(message,
+    'Use ' + config.prefix + 'restore save, ' + config.prefix + 'restore status, ' +
+    config.prefix + 'restore run, ' + config.prefix + 'restore export, or ' +
+    config.prefix + 'restore on|off.',
+  );
+}
 
 client.on('error', (error) => console.error('Discord client error:', error.message));
 process.on('unhandledRejection', (error) => console.error('Unhandled promise rejection:', error));

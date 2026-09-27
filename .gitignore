@@ -5,3 +5,4 @@ node_modules/
 data/settings.json
 data/backups/
 data/runtime.json
+data/layouts/
