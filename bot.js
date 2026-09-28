@@ -1453,7 +1453,7 @@ function helpCommandPayload(command, page = 1) {
   if (command === 'whitelist' || command === 'wl') {
     section('whitelist commands', ['whitelist add @user', 'whitelist user add <id>', 'whitelist user remove <id>', 'whitelist channel add <id>', 'whitelist category add <id>', 'whitelist role add <id>', 'whitelist list']);
   } else if (command === 'backup') {
-    section('backup commands', ['backup create', 'backup list', 'backup latest', 'backup inspect', 'backup diff', 'backup verify', 'backup stats', 'backup export', 'backup delete']);
+    section('backup commands', ['backup create', 'backup list', 'backup latest', 'backup inspect', 'backup diff', 'backup verify', 'backup stats', 'backup export', 'backup run', 'backup delete']);
   } else if (command === 'admin') {
     section('admin commands', ['admin add <id>', 'admin remove <id>', 'admin list', 'admin test']);
   } else if (command === 'audit' || command === 'logs') {
@@ -1504,7 +1504,7 @@ function helpEmbed(command, page = 1) {
   if (command === 'backup') {
     return embed.addFields({
       name: 'backup commands',
-      value: commandList('>backup create', '>backup list', '>backup inspect <file>'),
+      value: commandList('>backup create', '>backup list', '>backup inspect <file>', '>backup export', '>backup run (+ attach .json)'),
     });
   }
 
@@ -1563,7 +1563,7 @@ function helpEmbed(command, page = 1) {
   }
 
   return embed.addFields(
-    { name: 'backups', value: commandList('>backup create', '>backup list', '>backup inspect <file>') },
+    { name: 'backups', value: commandList('>backup create', '>backup list', '>backup inspect <file>', '>backup export', '>backup run (+ attach .json)') },
     { name: 'channel restore', value: commandList('>restore save', '>restore status', '>restore run', '>restore export', '>restore on|off') },
     { name: 'utilities', value: commandList('>ping', '>serverinfo', '>userinfo', '>channelinfo', '>roleinfo', '>purge', '>slowmode', '>lockdown') },
     { name: 'configuration', value: commandList('>config show', '>config threshold <type> <number>', '>config window <seconds>', '>config backup on|off', '>config dry-run on|off', '>prefix x', '>prefix reset') },
@@ -2133,6 +2133,52 @@ function backupStorageStats(guildId) {
   return { count: files.length, bytes, newest: files[0] || null, oldest: files[files.length - 1] || null };
 }
 
+async function loadLayoutFromMessage(message, args) {
+  const attachment = [...(message.attachments?.values() || [])].find((file) => /\.json$/i.test(file.name || ''));
+  if (attachment) {
+    if (attachment.size > 8 * 1024 * 1024) throw new Error('file is larger than 8 MB');
+    const response = await fetch(attachment.url);
+    if (!response.ok) throw new Error('could not download the file (' + response.status + ')');
+    const data = JSON.parse(await response.text());
+    const channels = Array.isArray(data) ? data : data && Array.isArray(data.channels) ? data.channels : null;
+    if (!channels || !channels.length) throw new Error('no channels found in ' + attachment.name);
+    return { source: attachment.name, layout: { channels: channels.filter((c) => c && c.name) } };
+  }
+  const requestedFile = args.length ? resolveBackupFileName(message.guild.id, args) : listServerBackups(message.guild.id)[0];
+  const entry = requestedFile && readServerBackup(message.guild.id, requestedFile);
+  if (!entry || !Array.isArray(entry.backup.channels)) return null;
+  return { source: entry.fileName, layout: { channels: entry.backup.channels } };
+}
+
+async function runLayoutRestore(message, args) {
+  let loaded;
+  try {
+    loaded = await loadLayoutFromMessage(message, args);
+  } catch (error) {
+    await sendCommandResponse(message, 'Could not read that file: ' + error.message);
+    return;
+  }
+  if (!loaded) {
+    await sendCommandResponse(message, 'Attach a saved backup/layout .json file to your message, or name a stored backup (' + config.prefix + 'backup list).');
+    return;
+  }
+  await sendCommandResponse(message, 'Restoring from ' + loaded.source + ' (' + loaded.layout.channels.length + ' channels)...');
+  const result = await restoreManager.restoreGuild(message.guild, { reason: 'Restore from ' + loaded.source + ' by ' + message.author.tag, layout: loaded.layout });
+  if (result.skipped) {
+    await sendCommandResponse(message, 'Restore skipped: ' + result.skipped);
+    return;
+  }
+  restoreManager.snapshotGuild(message.guild);
+  await sendCommandResponse(message,
+    'Restore finished\nRecreated: ' + result.created +
+    '\nAlready present (ignored): ' + result.kept +
+    '\nMoved back to the right category: ' + result.moved +
+    '\nFailed: ' + result.failed +
+    (result.reordered ? '\nChannels moved back into their original categories and order.' : '') +
+    (result.errors.length ? '\n' + result.errors.slice(0, 10).join('\n') : ''),
+  );
+}
+
 async function handleBackupCommand(message, args) {
   if (!isAdministrator(message.member)) {
     await sendCommandResponse(message, 'Administrator permission required.');
@@ -2226,6 +2272,11 @@ async function handleBackupCommand(message, args) {
     } catch (error) {
       await sendCommandResponse(message, 'Could not export backup: ' + error.message);
     }
+    return;
+  }
+
+  if (action === 'run' || action === 'restore' || action === 'load') {
+    await runLayoutRestore(message, args);
     return;
   }
 
@@ -2737,6 +2788,11 @@ async function handleRestoreCommand(message, args) {
     return;
   }
 
+  if ((action === 'run' || action === 'now' || action === 'channels') && message.attachments?.size) {
+    await runLayoutRestore(message, args);
+    return;
+  }
+
   if (action === 'run' || action === 'now' || action === 'channels') {
     await sendCommandResponse(message, 'Rebuilding missing channels...');
     const result = await restoreManager.restoreGuild(message.guild, {
@@ -2758,7 +2814,7 @@ async function handleRestoreCommand(message, args) {
 
   await sendCommandResponse(message,
     'Use ' + config.prefix + 'restore save, ' + config.prefix + 'restore status, ' +
-    config.prefix + 'restore run, ' + config.prefix + 'restore export, or ' +
+    config.prefix + 'restore run (attach .json to restore from a file), ' + config.prefix + 'restore export, or ' +
     config.prefix + 'restore on|off.',
   );
 }

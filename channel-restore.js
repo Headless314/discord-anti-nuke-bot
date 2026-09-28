@@ -236,7 +236,8 @@ function createRestoreManager({ dataDirectory, logger = console }) {
     restoring.add(guild.id);
     lastRestoreAt.set(guild.id, Date.now());
 
-    const result = { created: 0, kept: 0, failed: 0, reordered: false, errors: [] };
+    const result = { created: 0, kept: 0, moved: 0, failed: 0, reordered: false, errors: [] };
+    const claimed = new Set();
 
     try {
       try {
@@ -258,20 +259,30 @@ function createRestoreManager({ dataDirectory, logger = console }) {
           const parentId = entry.parentId ? idMap.get(entry.parentId) || null : null;
 
           const byId = guild.channels.cache.get(entry.id);
-          if (byId && byId.type === entry.type) {
-            idMap.set(entry.id, byId.id);
-            finalOrder.push(byId.id);
-            result.kept += 1;
-            continue;
+          let existing = byId && byId.type === entry.type && !claimed.has(byId.id) ? byId : null;
+          if (!existing) {
+            const sameParent = findMatchingChannel(guild, entry, parentId);
+            existing = sameParent && !claimed.has(sameParent.id) ? sameParent : null;
           }
-
-          const byName = findMatchingChannel(guild, entry, parentId);
-          if (byName) {
-            // Channel is still there under a new id — adopt it instead of
-            // creating a duplicate.
-            idMap.set(entry.id, byName.id);
-            finalOrder.push(byName.id);
+          if (!existing && entry.type !== CATEGORY) {
+            // Same channel sitting in the wrong category — adopt it and move it back.
+            const wantedName = normalizeName(entry.name);
+            existing = guild.channels.cache.find((channel) =>
+              channel.type === entry.type && !claimed.has(channel.id) && normalizeName(channel.name) === wantedName) || null;
+          }
+          if (existing) {
+            claimed.add(existing.id);
+            idMap.set(entry.id, existing.id);
+            finalOrder.push(existing.id);
             result.kept += 1;
+            if (entry.type !== CATEGORY && (existing.parentId || null) !== (parentId || null)) {
+              try {
+                await existing.setParent(parentId, { lockPermissions: false, reason });
+                result.moved += 1;
+              } catch (error) {
+                if (result.errors.length < 5) result.errors.push('Could not move #' + entry.name + ': ' + error.message);
+              }
+            }
             continue;
           }
 
@@ -283,6 +294,7 @@ function createRestoreManager({ dataDirectory, logger = console }) {
           try {
             const created = await createFromEntry(guild, entry, parentId, reason);
             idMap.set(entry.id, created.id);
+            claimed.add(created.id);
             finalOrder.push(created.id);
             result.created += 1;
           } catch (error) {
@@ -295,7 +307,7 @@ function createRestoreManager({ dataDirectory, logger = console }) {
         }
       }
 
-      if (result.created > 0) {
+      if (result.created > 0 || result.moved > 0 || layout) {
         try {
           const positions = finalOrder
             .map((channelId, index) => ({ channel: channelId, position: index }))
